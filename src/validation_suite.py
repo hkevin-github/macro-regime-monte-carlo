@@ -15,7 +15,7 @@ def run_validation_suite(data_path="data/processed/regime_labeled_dataset_v1.csv
     if not os.path.exists(data_path):
         raise FileNotFoundError(f"Missing labeled dataset. Run hmm_regime_engine.py first.")
 
-    df = pd.read_csv(data_path, index_col='Date', parse_dates=True)
+    df = pd.read_csv(data_path, index_col='date', parse_dates=True)
 
     print("="*60)
     print("           EMPIRICAL QUANTITATIVE VALIDATION REPORT          ")
@@ -41,7 +41,7 @@ def run_validation_suite(data_path="data/processed/regime_labeled_dataset_v1.csv
     # --- TEST 2: VOLATILITY SEPARATION ---
     print("\n[TEST 2] Checking Volatility Separation Across Regimes...")
     # Monthly returns annualize with sqrt(12), not sqrt(252) (that factor is for daily returns)
-    vol_profiles = df.groupby('inferred_regime')['spy_equivalent_return'].std() * np.sqrt(12)
+    vol_profiles = df.groupby('inferred_regime')['equity_return'].std() * np.sqrt(12)
     print("  * Annualized Equity Volatility Profile:")
     for regime, vol in vol_profiles.items():
         print(f"    - Regime {regime}: {vol*100:.2f}%")

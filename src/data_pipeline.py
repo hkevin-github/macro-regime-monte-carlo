@@ -195,6 +195,13 @@ if __name__ == "__main__":
 
     try:
         sample_df = run_data_pipeline(fred_key=API_KEY, start="1953-04-01", end="2026-07-01")
+
+        # Persist to the path the downstream HMM engine expects.
+        output_path = "data/processed/aligned_macro_dataset_v1.csv"
+        os.makedirs(os.path.dirname(output_path), exist_ok=True)
+        sample_df.to_csv(output_path)
+        print(f"[+] Success: Aligned dataset written to: {output_path}")
+
         print("\n--- SAMPLE VIEW OF ALIGNED PIPELINE ---")
         print(sample_df[[
             'equity_return',
