@@ -30,14 +30,17 @@ def generate_regime_map(data_path="data/processed/regime_labeled_dataset_v1.csv"
     # Step through data to paint background spans according to active state
     print("[*] Generating historical regime background highlights...")
     current_regime = df['inferred_regime'].iloc[0]
-    start_date = df.index[0]
+    start_idx = 0
     
     for i in range(1, len(df)):
-        if df['inferred_regime'].iloc[i] != current_regime or i == len(df) - 1:
-            end_date = df.index[i]
-            plt.axvspan(start_date, end_date, color=colors[current_regime], alpha=0.2)
+        if df['inferred_regime'].iloc[i] != current_regime:
+            # Regime changed - paint the previous regime's span
+            plt.axvspan(df.index[start_idx], df.index[i-1], color=colors[current_regime], alpha=0.2)
             current_regime = df['inferred_regime'].iloc[i]
-            start_date = end_date
+            start_idx = i
+    
+    # Paint the final regime's span after loop ends
+    plt.axvspan(df.index[start_idx], df.index[-1], color=colors[current_regime], alpha=0.2)
             
     # Plot standard S&P 500 trajectory line on top
     plt.plot(df.index, df['sp500_indexed'], color='#1F77B4', lw=1.5, label='S&P 500 Index (Normalized)')
