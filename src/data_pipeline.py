@@ -17,11 +17,41 @@ equity returns, and Fama-French factors line up on the same monthly timeline.
 """
 
 import os
+import re
+from pathlib import Path
+
 import yfinance as yf
 import pandas as pd
 import numpy as np
 from fredapi import Fred
 import pandas_datareader.data as web
+
+
+def load_env_file(env_path: str | None = None) -> dict[str, str]:
+    """Load key/value pairs from a .env file into a dictionary."""
+    path = Path(env_path or Path(__file__).resolve().parents[1] / ".env")
+    if not path.exists():
+        return {}
+
+    values: dict[str, str] = {}
+    for raw_line in path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        values[key.strip()] = normalize_api_key(value)
+    return values
+
+
+def normalize_api_key(value: str | None) -> str:
+    """Trim whitespace and surrounding quotes from environment values."""
+    if value is None:
+        return ""
+    cleaned = value.strip()
+    cleaned = cleaned.strip("\"'")
+    return cleaned
 
 
 def fetch_yahoo_returns(start_date: str, end_date: str) -> pd.DataFrame:
@@ -89,10 +119,16 @@ def fetch_fred_macro(api_key: str, start_date: str, end_date: str) -> pd.DataFra
       - Yield Curve: GS10 - TB3MS
       - Credit Risk: BAA - GS10
     """
-    if not api_key or api_key == "YOUR_FALLBACK_KEY_HERE":
+    normalized_key = normalize_api_key(api_key)
+    if not normalized_key or normalized_key == "YOUR_FALLBACK_KEY_HERE":
         raise ValueError("CRITICAL: FRED API Key is missing. Check setup configurations.")
 
-    fred = Fred(api_key=api_key)
+    if len(normalized_key) != 32 or not re.fullmatch(r"[a-z0-9]+", normalized_key):
+        raise ValueError(
+            "CRITICAL: FRED API Key is invalid. Provide a 32-character lowercase alphanumeric key."
+        )
+
+    fred = Fred(api_key=normalized_key)
 
     # Query targets, all Monthly frequency, 1953 - Present coverage
     series_map = {
@@ -190,14 +226,16 @@ def run_data_pipeline(fred_key: str, start: str = "1953-04-01", end: str = "2026
 
 
 if __name__ == "__main__":
-    # Retrieve key from environment variable or update string fallback right here:
-    API_KEY = os.getenv("FRED_API_KEY", "YOUR_ACTUAL_FRED_API_KEY_HERE")
+    env_values = load_env_file()
+    API_KEY = normalize_api_key(os.getenv("FRED_API_KEY") or env_values.get("FRED_API_KEY"))
+    if not API_KEY:
+        API_KEY = "YOUR_ACTUAL_FRED_API_KEY_HERE"
 
     try:
         sample_df = run_data_pipeline(fred_key=API_KEY, start="1953-04-01", end="2026-07-01")
 
         # Persist to the path the downstream HMM engine expects.
-        output_path = "data/processed/aligned_macro_dataset_v1.csv"
+        output_path = "data/processed/aligned_macro_dataset.csv"
         os.makedirs(os.path.dirname(output_path), exist_ok=True)
         sample_df.to_csv(output_path)
         print(f"[+] Success: Aligned dataset written to: {output_path}")
