@@ -2,13 +2,6 @@
 Regime Inference Engine - Hidden Markov Model Training
 Trains a Gaussian Hidden Markov Model directly on the monthly macro
 observation matrix produced by the ingestion pipeline.
-
-State count should be determined by running model_selection.py first.
-The default n_components=4 was selected based on BIC comparison showing
-4 states fit meaningfully better than 2, 3, or 5+ alternatives.
-
-Regimes are initialized unsupervised (k-means-based) and labeled after fitting
-from their empirical feature means, not assumed in advance.
 """
 
 import os
@@ -19,7 +12,6 @@ from hmmlearn.hmm import GaussianHMM
 import joblib
 
 
-# Feature columns used for HMM training (module-level constant)
 FEATURE_COLS = [
     'growth_yoy_zscore',
     'cpi_yoy_zscore',
@@ -30,59 +22,37 @@ FEATURE_COLS = [
 
 
 def load_processed_data(file_path: str) -> pd.DataFrame:
-    """Load aligned macro dataset and ensure proper datetime index."""
     if not os.path.exists(file_path):
         raise FileNotFoundError(f"Processed data matrix not discovered at {file_path}")
     print(f"[*] Ingesting historical master data from: {file_path}")
     df = pd.read_csv(file_path, index_col='date', parse_dates=True)
-    
-    # Ensure index is sorted and has no duplicates
     df = df.sort_index()
     if df.index.duplicated().any():
         print("⚠️  WARNING: Duplicate dates found. Keeping last occurrence.")
         df = df[~df.index.duplicated(keep='last')]
-    
     return df
 
 
 def load_model_selection_recommendation() -> int:
-    """
-    Load the recommended number of states from model_selection.py output.
-    Falls back to 4 if recommendation file doesn't exist.
-    """
     rec_path = "data/models/model_selection_recommendation.json"
-    
     if os.path.exists(rec_path):
         with open(rec_path, 'r') as f:
             rec = json.load(f)
-        recommended = rec['recommended_states']
+        recommended = int(rec['recommended_states'])
         print(f"[*] Using recommended number of states from model selection: {recommended}")
         return recommended
-    else:
-        print("⚠️  No model selection recommendation found. Using default: 4 states")
-        print("    Run model_selection.py first for data-driven state selection")
-        return 4
+
+    print("⚠️  No model selection recommendation found. Using default: 4 states")
+    return 4
 
 
 def train_regime_hmm(df: pd.DataFrame, n_components: int = None) -> tuple[GaussianHMM, pd.DataFrame]:
-    """
-    Trains a Gaussian HMM on the monthly macro observation matrix.
-    
-    Feature set spans all five macro concepts from the ingestion pipeline:
-    Growth, Inflation, Labor, Yield Curve, and Credit Risk.
-    
-    Returns the fitted model and a labeled dataframe with hard states,
-    posterior probabilities, and uncertainty metrics.
-    """
-    # Use recommended number of states if not specified
     if n_components is None:
         n_components = load_model_selection_recommendation()
-    
-    # Data is already monthly (one row per month, month-end indexed)
+
     monthly_df = df[FEATURE_COLS].dropna()
     X_monthly = monthly_df.values
 
-    # Instantiate with fully unsupervised initialization
     model = GaussianHMM(
         n_components=n_components,
         covariance_type='diag',
@@ -94,26 +64,20 @@ def train_regime_hmm(df: pd.DataFrame, n_components: int = None) -> tuple[Gaussi
     print(f"[*] Training {n_components}-state HMM (unsupervised initialization)...")
     model.fit(X_monthly)
 
-    # Hard regime assignment
     monthly_states = model.predict(X_monthly)
-
-    # Soft regime probabilities
     posteriors = model.predict_proba(X_monthly)
 
     labeled_df = monthly_df.copy()
     labeled_df['inferred_regime'] = monthly_states
     labeled_df['regime_confidence'] = posteriors.max(axis=1)
 
-    # Uncertainty metrics
     sorted_probs = np.sort(posteriors, axis=1)
-    labeled_df['regime_margin'] = sorted_probs[:, -1] - sorted_probs[:, -2]  # gap between top 2
+    labeled_df['regime_margin'] = sorted_probs[:, -1] - sorted_probs[:, -2]
     labeled_df['regime_entropy'] = -(posteriors * np.log(posteriors + 1e-12)).sum(axis=1)
 
-    # Append posterior regime probabilities
     for i in range(n_components):
         labeled_df[f'regime_{i}_prob'] = posteriors[:, i]
 
-    # Reattach non-feature columns (equity returns, Fama-French factors, raw macro)
     other_cols = [c for c in df.columns if c not in FEATURE_COLS]
     labeled_df = labeled_df.join(df[other_cols], how='left')
 
@@ -121,168 +85,133 @@ def train_regime_hmm(df: pd.DataFrame, n_components: int = None) -> tuple[Gaussi
 
 
 def classify_regime(row: pd.Series) -> tuple[str, str]:
-    """
-    Classify a regime based on its macro feature profile.
-    Returns (label, color) tuple for interpretability and visualization.
-    
-    This is a heuristic rule-based classifier, not a supervised model.
-    """
     growth = row["growth_yoy_zscore"]
     cpi = row["cpi_yoy_zscore"]
     unemp = row["unemployment_delta_zscore"]
     yspread = row["yield_spread_delta_zscore"]
     cspread = row["credit_spread_delta_zscore"]
 
-    # Strong growth, improving labor, tighter spreads
     if growth > 0.5 and unemp < 0 and yspread < 0 and cspread < 0:
         return "Growth", "#2CA02C"
 
-    # Weak growth, low inflation, worsening labor
     if growth < -0.5 and cpi < 0 and unemp > 0:
         return "Slowdown / Shock", "#4FC3F7"
 
-    # Weak growth, elevated inflation, widening spreads
     if growth < 0 and cpi > 0.5 and (yspread > 0 or cspread > 0):
         return "Inflationary Stress", "#D62728"
 
-    # Default middle regime
     return "Balanced", "#FFD966"
 
 
 def assign_regime_labels(labeled_df: pd.DataFrame, feature_cols: list) -> tuple[pd.DataFrame, dict, dict]:
-    """
-    Map numeric regime IDs to human-readable economic labels based on feature means.
-    
-    Returns:
-        - labeled dataframe with 'regime_label' column
-        - regime_name_map: {regime_id: label}
-        - regime_color_map: {regime_id: color}
-    """
     regime_means = labeled_df.groupby('inferred_regime')[feature_cols].mean()
-    
+
     regime_name_map = {}
     regime_color_map = {}
-    
+
     for regime_id, row in regime_means.iterrows():
         label, color = classify_regime(row)
         regime_name_map[int(regime_id)] = label
         regime_color_map[int(regime_id)] = color
-    
+
     labeled_df['regime_label'] = labeled_df['inferred_regime'].map(regime_name_map)
-    
+
     print("\n[+] Regime Label Mapping:")
     for regime_id, label in regime_name_map.items():
         print(f"Regime {regime_id} → {label}")
-    
+
     return labeled_df, regime_name_map, regime_color_map
 
 
 def check_empirical_persistence(labeled_df: pd.DataFrame) -> pd.Series:
-    """
-    Measure how often regimes actually persist in the decoded sequence.
-    Compares empirical persistence to model-implied transition probabilities.
-    """
-    print("\n" + "="*60)
+    print("\n" + "=" * 60)
     print("EMPIRICAL REGIME PERSISTENCE")
-    print("="*60)
-    
-    # Overall persistence
-    regime_stays = (labeled_df['inferred_regime'].shift(1) == labeled_df['inferred_regime'])
-    overall = regime_stays.mean()
+    print("=" * 60)
+
+    s = labeled_df['inferred_regime'].values
+    regimes = sorted(pd.unique(s))
+
+    overall = np.mean(s[1:] == s[:-1]) if len(s) > 1 else np.nan
     print(f"\n[+] Overall empirical persistence: {overall:.3f}")
-    
-    # Per-regime persistence
+
     empirical_persist = {}
-    for regime in sorted(labeled_df['inferred_regime'].unique()):
-        regime_data = labeled_df[labeled_df['inferred_regime'] == regime]
-        stays = (regime_data['inferred_regime'].shift(1) == regime).sum()
-        total = len(regime_data) - 1  # exclude first observation
-        persist = stays / total if total > 0 else 0
-        empirical_persist[regime] = persist
-    
+    for regime in regimes:
+        prev = s[:-1]
+        nxt = s[1:]
+        denom = np.sum(prev == regime)
+        numer = np.sum((prev == regime) & (nxt == regime))
+        persist = numer / denom if denom > 0 else 0.0
+        empirical_persist[int(regime)] = persist
+
     print("\n[+] Empirical persistence by regime:")
     for regime, persist in empirical_persist.items():
         print(f"Regime {regime}: {persist:.3f}")
-    
-    print("="*60)
+
+    print("=" * 60)
     return pd.Series(empirical_persist)
 
 
 def check_regime_quality(labeled_df: pd.DataFrame, model: GaussianHMM, feature_cols: list):
-    """
-    Diagnose whether regimes are well-separated and stable.
-    Flags potential issues: small regimes, low persistence, near-duplicate states.
-    """
-    print("\n" + "="*60)
+    print("\n" + "=" * 60)
     print("REGIME QUALITY DIAGNOSTICS")
-    print("="*60)
-    
-    # 1. Regime sizes
+    print("=" * 60)
+
     regime_counts = labeled_df['inferred_regime'].value_counts().sort_index()
     print("\n[*] Regime Frequency:")
     for regime, count in regime_counts.items():
         pct = 100 * count / len(labeled_df)
         print(f"Regime {regime}: {count:4d} months ({pct:5.1f}%)")
-    
+
     smallest = regime_counts.min()
-    print(f"\nSmallest regime: {smallest} months ({100*smallest/len(labeled_df):.1f}%)")
+    print(f"\nSmallest regime: {smallest} months ({100 * smallest / len(labeled_df):.1f}%)")
     if smallest < 50:
         print("⚠️  WARNING: Regime with < 50 months may be unstable")
-    
-    # 2. Model-implied regime persistence (diagonal of transition matrix)
+
     persistence = np.diag(model.transmat_)
     print("\n[*] Model-Implied Regime Persistence (from transition matrix):")
     for i, p in enumerate(persistence):
         status = "✓" if p >= 0.75 else "⚠️" if p >= 0.65 else "❌"
         print(f"Regime {i}: {p:.3f} {status}")
-    
+
     if any(persistence < 0.70):
         print("\n⚠️  WARNING: Some regimes have persistence < 0.70 (frequent switching)")
-    
-    # 3. Regime separation (Euclidean distance between regime means in z-score space)
+
     regime_means = labeled_df.groupby('inferred_regime')[feature_cols].mean().values
     n_regimes = len(regime_means)
-    
+
     print("\n[*] Pairwise Distance Between Regime Means (z-score space):")
-    min_dist = float('inf')
     close_pairs = []
-    
     for i in range(n_regimes):
-        for j in range(i+1, n_regimes):
+        for j in range(i + 1, n_regimes):
             dist = np.linalg.norm(regime_means[i] - regime_means[j])
             status = "✓" if dist >= 1.5 else "⚠️" if dist >= 1.0 else "❌"
             print(f"Regime {i} ↔ Regime {j}: {dist:.3f} {status}")
-            
-            if dist < min_dist:
-                min_dist = dist
             if dist < 1.0:
                 close_pairs.append((i, j, dist))
-    
+
     if close_pairs:
         print(f"\n⚠️  WARNING: {len(close_pairs)} regime pair(s) very close (distance < 1.0):")
         for i, j, d in close_pairs:
             print(f"   Regimes {i} and {j} (distance: {d:.3f}) may be near-duplicates")
-    
-    # 4. Uncertainty metrics summary
+
     print("\n[*] Regime Uncertainty Metrics:")
     print(f"Mean confidence: {labeled_df['regime_confidence'].mean():.3f}")
     print(f"Mean margin (top 2 gap): {labeled_df['regime_margin'].mean():.3f}")
     print(f"Mean entropy: {labeled_df['regime_entropy'].mean():.3f}")
-    
+
     low_confidence = (labeled_df['regime_confidence'] < 0.5).sum()
     if low_confidence > 0:
         pct = 100 * low_confidence / len(labeled_df)
         print(f"\n⚠️  WARNING: {low_confidence} months ({pct:.1f}%) have confidence < 0.5")
-    
-    print("="*60)
+
+    print("=" * 60)
 
 
 def output_model_diagnostics(model: GaussianHMM, labeled_df: pd.DataFrame, feature_cols: list):
-    """Print comprehensive model diagnostics including regime profiles and return statistics."""
     n_components = model.n_components
-    print("\n" + "="*60)
+    print("\n" + "=" * 60)
     print("             HMM REGIME MODEL DIAGNOSTICS             ")
-    print("="*60)
+    print("=" * 60)
 
     print(f"\n[+] Observations per Regime (n_components={n_components}):")
     regime_counts = labeled_df['inferred_regime'].value_counts().sort_index()
@@ -313,75 +242,62 @@ def output_model_diagnostics(model: GaussianHMM, labeled_df: pd.DataFrame, featu
     returns_profile = labeled_df.groupby('inferred_regime')[['equity_return']].agg(['mean', 'std', 'count'])
     returns_profile.columns = ['mean', 'std', 'count']
     print(returns_profile.round(5))
-    
-    print("="*60)
+
+    print("=" * 60)
 
 
-def save_model_artifacts(model: GaussianHMM, labeled_df: pd.DataFrame, 
-                        regime_name_map: dict, regime_color_map: dict):
-    """
-    Persist all model artifacts needed for Phase 5 Monte Carlo simulation.
-    Saves: fitted HMM, regime statistics, label mappings, and transition matrix.
-    """
+def save_model_artifacts(model: GaussianHMM, labeled_df: pd.DataFrame, regime_name_map: dict, regime_color_map: dict):
     os.makedirs("data/models", exist_ok=True)
-    
-    # 1. Save fitted HMM model
+
     model_path = f"data/models/hmm_{model.n_components}state.pkl"
     joblib.dump(model, model_path)
     print(f"[+] Fitted HMM saved to: {model_path}")
-    
-    # 2. Save regime label mappings
+
     label_map_path = "data/models/regime_labels.json"
     with open(label_map_path, "w") as f:
         json.dump({
-            "regime_names": regime_name_map,
-            "regime_colors": regime_color_map
+            "regime_names": {int(k): v for k, v in regime_name_map.items()},
+            "regime_colors": {int(k): v for k, v in regime_color_map.items()}
         }, f, indent=2)
     print(f"[+] Regime label mappings saved to: {label_map_path}")
-    
-    # 3. Save regime-conditioned market statistics for Phase 5
+
     regime_stats = {}
     for regime in sorted(labeled_df['inferred_regime'].unique()):
         regime_data = labeled_df[labeled_df['inferred_regime'] == regime]
-        
-        # Calculate regime duration statistics
+
         regime_series = labeled_df['inferred_regime']
-        regime_runs = (regime_series != regime_series.shift()).cumsum()
-        regime_durations = regime_series[regime_series == regime].groupby(regime_runs).size()
-        
+        run_id = (regime_series != regime_series.shift()).cumsum()
+        durations = regime_series[regime_series == regime].groupby(run_id).size()
+
         regime_stats[int(regime)] = {
             "label": regime_name_map[int(regime)],
             "count": int(len(regime_data)),
             "frequency": float(len(regime_data) / len(labeled_df)),
-            
-            # Equity statistics
+
             "equity_mean": float(regime_data['equity_return'].mean()),
             "equity_std": float(regime_data['equity_return'].std()),
             "equity_skew": float(regime_data['equity_return'].skew()),
             "equity_kurt": float(regime_data['equity_return'].kurt()),
-            
-            # Inflation statistics (if available)
+
+            # NOTE: CPI YoY stored here; convert to monthly later in Monte Carlo
             "inflation_mean": float(regime_data['cpi_yoy'].mean()) if 'cpi_yoy' in regime_data else None,
             "inflation_std": float(regime_data['cpi_yoy'].std()) if 'cpi_yoy' in regime_data else None,
-            
-            # Regime duration statistics
-            "duration_mean": float(regime_durations.mean()),
-            "duration_median": float(regime_durations.median()),
-            "duration_std": float(regime_durations.std()),
-            
-            # Macro feature profile
+
+            "duration_mean": float(durations.mean()) if len(durations) else None,
+            "duration_median": float(durations.median()) if len(durations) else None,
+            "duration_std": float(durations.std()) if len(durations) else None,
+
             "feature_profile": {
-                col: float(regime_data[col].mean()) 
+                col: float(regime_data[col].mean())
                 for col in FEATURE_COLS if col in regime_data
             }
         }
-    
+
     stats_path = "data/models/regime_market_assumptions.json"
     with open(stats_path, "w") as f:
         json.dump(regime_stats, f, indent=2)
     print(f"[+] Regime market assumptions saved to: {stats_path}")
-    
-    # 4. Save transition matrix separately for easy loading
+
     transition_path = "data/models/transition_matrix.csv"
     pd.DataFrame(
         model.transmat_,
@@ -396,38 +312,33 @@ if __name__ == "__main__":
     DATA_OUTPUT = "data/processed/regime_labeled_dataset.csv"
 
     try:
-        # Load data
         master_df = load_processed_data(DATA_INPUT)
-        
-        # Train HMM (uses recommended number of states from model_selection.py)
-        print("\n" + "="*60)
+
+        print("\n" + "=" * 60)
         print("TRAINING HMM")
-        print("="*60)
+        print("=" * 60)
         hmm_model, output_df = train_regime_hmm(master_df, n_components=None)
-        
-        # Assign human-readable labels
-        print("\n" + "="*60)
+
+        print("\n" + "=" * 60)
         print("REGIME INTERPRETATION")
-        print("="*60)
+        print("=" * 60)
         output_df, regime_names, regime_colors = assign_regime_labels(output_df, FEATURE_COLS)
-        
-        # Run diagnostics
-        print("\n" + "="*60)
+
+        print("\n" + "=" * 60)
         print("MODEL VALIDATION")
-        print("="*60)
+        print("=" * 60)
         output_model_diagnostics(hmm_model, output_df, FEATURE_COLS)
         check_regime_quality(output_df, hmm_model, FEATURE_COLS)
         check_empirical_persistence(output_df)
-        
-        # Save everything
-        print("\n" + "="*60)
+
+        print("\n" + "=" * 60)
         print("PERSISTING MODEL ARTIFACTS")
-        print("="*60)
+        print("=" * 60)
         output_df.to_csv(DATA_OUTPUT)
         print(f"[+] Regime-labeled dataset written to: {DATA_OUTPUT}")
-        
+
         save_model_artifacts(hmm_model, output_df, regime_names, regime_colors)
-        
+
     except Exception as e:
         print(f"[-] Training Engine Failure: {str(e)}")
         raise
