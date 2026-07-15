@@ -9,6 +9,18 @@ import pandas as pd
 from typing import Optional, Literal
 
 
+def annual_to_monthly_rate(annual_rate: float) -> float:
+    """Convert an annualized rate into an equivalent monthly rate."""
+    if annual_rate is None:
+        return None
+
+    annual_rate = float(annual_rate)
+    if annual_rate <= -1.0:
+        return -1.0
+
+    return (1.0 + annual_rate) ** (1.0 / 12.0) - 1.0
+
+
 class RegimeReturnSampler:
     """
     Samples returns from regime-conditional distributions.
@@ -85,11 +97,12 @@ class RegimeReturnSampler:
             params['equity_mean'],
             params['equity_std']
         )
-        
-        inflation_rate = np.random.normal(
+
+        annual_inflation_rate = np.random.normal(
             params.get('inflation_mean', 0.02),
             params.get('inflation_std', 0.01)
         )
+        inflation_rate = annual_to_monthly_rate(annual_inflation_rate)
         
         return equity_return, inflation_rate
     
@@ -100,14 +113,16 @@ class RegimeReturnSampler:
         equity_return = historical_ret[idx]
         
         if self.historical_inflation[regime] is not None:
-            inflation_rate = self.historical_inflation[regime][idx]
+            annual_inflation_rate = self.historical_inflation[regime][idx]
+            inflation_rate = annual_to_monthly_rate(annual_inflation_rate)
         else:
             # Fallback to Gaussian if no historical inflation
             params = self.regime_stats[regime]
-            inflation_rate = np.random.normal(
+            annual_inflation_rate = np.random.normal(
                 params.get('inflation_mean', 0.02),
                 params.get('inflation_std', 0.01)
             )
+            inflation_rate = annual_to_monthly_rate(annual_inflation_rate)
         
         return equity_return, inflation_rate
     

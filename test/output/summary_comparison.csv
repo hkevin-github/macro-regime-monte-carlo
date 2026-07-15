@@ -1,0 +1,7 @@
+Metric,Regime-Aware,Baseline
+Success Rate,86.71%,88.70%
+5th Percentile Final Balance,$0,$0
+50th Percentile Final Balance,"$4,114,280","$3,781,078"
+95th Percentile Final Balance,"$31,520,084","$27,003,991"
+Failure Rate,13.29%,11.30%
+Median Failure Month,241.0,249.0

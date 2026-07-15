@@ -10,10 +10,10 @@ from typing import Optional, Dict, List
 from pathlib import Path
 import json
 
-from regime_assumptions import RegimeAssumptions
-from regime_path_simulator import RegimePathSimulator
-from regime_return_sampler import RegimeReturnSampler
-from portfolio_engine import PortfolioEngine, PortfolioConfig
+from .regime_assumptions import RegimeAssumptions
+from .regime_path_simulator import RegimePathSimulator
+from .regime_return_sampler import RegimeReturnSampler, annual_to_monthly_rate
+from .portfolio_engine import PortfolioEngine, PortfolioConfig
 
 
 class MonteCarloRunner:
@@ -232,8 +232,8 @@ class MonteCarloRunner:
         
         avg_return = df['equity_return'].mean()
         avg_std = df['equity_return'].std()
-        avg_inflation = df['cpi_yoy'].mean() if 'cpi_yoy' in df else 0.02 / 12
-        inflation_std = df['cpi_yoy'].std() if 'cpi_yoy' in df else 0.01 / 12
+        avg_inflation = annual_to_monthly_rate(df['cpi_yoy'].mean()) if 'cpi_yoy' in df else 0.02 / 12
+        inflation_std = annual_to_monthly_rate(df['cpi_yoy'].std()) if 'cpi_yoy' in df else 0.01 / 12
         
         print(f"Using historical average return: {avg_return:.4f} per month")
         print(f"Using historical volatility: {avg_std:.4f} per month")
