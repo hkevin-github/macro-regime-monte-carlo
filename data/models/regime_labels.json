@@ -1,0 +1,14 @@
+{
+  "regime_names": {
+    "0": "Balanced",
+    "1": "Slowdown / Shock",
+    "2": "Inflationary Stress",
+    "3": "Growth"
+  },
+  "regime_colors": {
+    "0": "#FFD966",
+    "1": "#4FC3F7",
+    "2": "#D62728",
+    "3": "#2CA02C"
+  }
+}

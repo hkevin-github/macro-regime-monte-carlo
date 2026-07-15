@@ -1,0 +1,86 @@
+{
+  "0": {
+    "label": "Balanced",
+    "count": 400,
+    "frequency": 0.4624277456647399,
+    "equity_mean": 0.009577639214814802,
+    "equity_std": 0.03671043510671914,
+    "equity_skew": -0.1681831975634518,
+    "equity_kurt": 0.5276285167022494,
+    "inflation_mean": 0.02798534586051977,
+    "inflation_std": 0.009667981419478259,
+    "duration_mean": 26.666666666666668,
+    "duration_median": 24.0,
+    "duration_std": 18.553654498187015,
+    "feature_profile": {
+      "growth_yoy_zscore": -0.06722920761654429,
+      "cpi_yoy_zscore": -0.2744042565983806,
+      "unemployment_delta_zscore": -0.06856505260122628,
+      "yield_spread_delta_zscore": -0.01878387670274355,
+      "credit_spread_delta_zscore": -0.029115885558435667
+    }
+  },
+  "1": {
+    "label": "Slowdown / Shock",
+    "count": 48,
+    "frequency": 0.055491329479768786,
+    "equity_mean": 0.017080416567463327,
+    "equity_std": 0.04621184237118641,
+    "equity_skew": -0.22378197560434798,
+    "equity_kurt": 1.044637588812468,
+    "inflation_mean": 0.007309548773907871,
+    "inflation_std": 0.006207567854809291,
+    "duration_mean": 12.0,
+    "duration_median": 10.5,
+    "duration_std": 4.242640687119285,
+    "feature_profile": {
+      "growth_yoy_zscore": -1.3159657171607537,
+      "cpi_yoy_zscore": -1.020671663436973,
+      "unemployment_delta_zscore": 0.32080555575788644,
+      "yield_spread_delta_zscore": 0.02380392504378259,
+      "credit_spread_delta_zscore": 0.016396990291878077
+    }
+  },
+  "2": {
+    "label": "Inflationary Stress",
+    "count": 174,
+    "frequency": 0.20115606936416186,
+    "equity_mean": 0.0029436349961752886,
+    "equity_std": 0.054878382613734324,
+    "equity_skew": -0.18806486195607222,
+    "equity_kurt": 0.12108745352538408,
+    "inflation_mean": 0.06818420796664103,
+    "inflation_std": 0.03914265566704838,
+    "duration_mean": 17.4,
+    "duration_median": 12.0,
+    "duration_std": 15.714112553158493,
+    "feature_profile": {
+      "growth_yoy_zscore": -0.9293406549502371,
+      "cpi_yoy_zscore": 1.1765241141981402,
+      "unemployment_delta_zscore": 0.4744498413172945,
+      "yield_spread_delta_zscore": 0.2892595711000059,
+      "credit_spread_delta_zscore": 0.26654189741482115
+    }
+  },
+  "3": {
+    "label": "Growth",
+    "count": 243,
+    "frequency": 0.2809248554913295,
+    "equity_mean": 0.0051655646327477935,
+    "equity_std": 0.03979331107501946,
+    "equity_skew": -0.9512228353310206,
+    "equity_kurt": 3.954591716899377,
+    "inflation_mean": 0.030347617874837064,
+    "inflation_std": 0.02092741409686286,
+    "duration_mean": 20.25,
+    "duration_median": 16.0,
+    "duration_std": 15.65029770265787,
+    "feature_profile": {
+      "growth_yoy_zscore": 1.0360630100068935,
+      "cpi_yoy_zscore": -0.18914096043682874,
+      "unemployment_delta_zscore": -0.2902342305559559,
+      "yield_spread_delta_zscore": -0.18090618556545338,
+      "credit_spread_delta_zscore": -0.14616868913915537
+    }
+  }
+}
