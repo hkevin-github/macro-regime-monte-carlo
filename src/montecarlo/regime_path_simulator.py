@@ -16,8 +16,23 @@ class RegimePathSimulator:
 
     def _validate_transition_matrix(self):
         row_sums = self.transition_matrix.sum(axis=1)
-        if not np.allclose(row_sums, 1.0):
-            raise ValueError("Transition matrix rows must sum to 1.0")
+        
+        if not np.allclose(row_sums, 1.0, rtol=1e-10, atol=1e-12):
+            max_deviation = np.max(np.abs(row_sums - 1.0))
+            print(f"⚠️  WARNING: Transition matrix rows don't sum to 1.0")
+            print(f"    Row sums: {row_sums}")
+            print(f"    Max deviation: {max_deviation:.2e}")
+            print(f"    Renormalizing...")
+            
+            # Renormalize
+            self.transition_matrix = self.transition_matrix / row_sums[:, np.newaxis]
+            
+            # Verify
+            new_row_sums = self.transition_matrix.sum(axis=1)
+            if not np.allclose(new_row_sums, 1.0, rtol=1e-14, atol=1e-15):
+                raise ValueError("Failed to renormalize transition matrix")
+            
+            print(f"    Renormalization successful")
 
     def _compute_stationary_distribution(self) -> np.ndarray:
         eigenvalues, eigenvectors = np.linalg.eig(self.transition_matrix.T)

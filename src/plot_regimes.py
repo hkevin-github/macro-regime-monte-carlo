@@ -2,8 +2,7 @@ import os
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
-from sklearn.tree import DecisionTreeClassifier
-
+from regime_utils import classify_regime
 
 FEATURE_COLS = [
     "growth_yoy_zscore",
@@ -12,29 +11,6 @@ FEATURE_COLS = [
     "yield_spread_delta_zscore",
     "credit_spread_delta_zscore",
 ]
-
-
-def classify_regime(row):
-    growth = row["growth_yoy_zscore"]
-    cpi = row["cpi_yoy_zscore"]
-    unemp = row["unemployment_delta_zscore"]
-    yspread = row["yield_spread_delta_zscore"]
-    cspread = row["credit_spread_delta_zscore"]
-
-    # Strong growth, improving labor, tighter spreads
-    if growth > 0.5 and unemp < 0 and yspread < 0 and cspread < 0:
-        return "Growth", "#2CA02C"
-
-    # Weak growth, low inflation, worsening labor
-    if growth < -0.5 and cpi < 0 and unemp > 0:
-        return "Slowdown / Shock", "#4FC3F7"
-
-    # Weak growth, elevated inflation, widening spreads
-    if growth < 0 and cpi > 0.5 and (yspread > 0 or cspread > 0):
-        return "Inflationary Stress", "#D62728"
-
-    # Default middle regime
-    return "Balanced", "#FFD966"
 
 def generate_regime_map(data_path="data/processed/regime_labeled_dataset.csv"):
     if not os.path.exists(data_path):

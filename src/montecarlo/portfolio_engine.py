@@ -19,7 +19,7 @@ class PortfolioConfig:
     rebalance_frequency: int = 12
     failure_threshold: float = 0.0
     target_end_balance: float = 0.0
-
+    annual_fee: float = 0.0
 
 class PortfolioEngine:
     def __init__(self, config: PortfolioConfig):
@@ -35,6 +35,7 @@ class PortfolioEngine:
         withdrawal_history = np.zeros(n_periods)
         contribution_history = np.zeros(n_periods)
         cumulative_inflation_history = np.zeros(n_periods + 1)
+        monthly_fee_rate = self.config.annual_fee / 12.0
 
         balance_history[0] = self.config.initial_balance
         cumulative_inflation_history[0] = 1.0
@@ -49,6 +50,9 @@ class PortfolioEngine:
             cumulative_inflation_history[t + 1] = cumulative_inflation
 
             balance = balance_history[t] * (1.0 + returns[t])
+
+            # Apply fees
+            balance *= (1.0 - monthly_fee_rate)
 
             if self.config.withdrawal_inflation_adjust:
                 withdrawal = monthly_withdrawal_base * cumulative_inflation
@@ -83,8 +87,8 @@ class PortfolioEngine:
             if final_balance < self.config.target_end_balance:
                 success = False
 
-        running_max = np.maximum.accumulate(balance_history[1:])
-        drawdown = np.where(running_max > 0, 1.0 - balance_history[1:] / running_max, 0.0)
+        running_max = np.maximum.accumulate(balance_history)
+        drawdown = np.where(running_max > 0, 1.0 - balance_history / running_max, 0.0)
         max_drawdown = float(np.max(drawdown)) if len(drawdown) else 0.0
 
         return {

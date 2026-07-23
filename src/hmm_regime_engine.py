@@ -10,6 +10,7 @@ import numpy as np
 import pandas as pd
 from hmmlearn.hmm import GaussianHMM
 import joblib
+from regime_utils import classify_regime
 
 
 FEATURE_COLS = [
@@ -63,6 +64,18 @@ def train_regime_hmm(df: pd.DataFrame, n_components: int = None) -> tuple[Gaussi
 
     print(f"[*] Training {n_components}-state HMM (unsupervised initialization)...")
     model.fit(X_monthly)
+    
+    # ADD CONVERGENCE CHECK:
+    if not model.monitor_.converged:
+        print(f"⚠️  WARNING: HMM did not converge after {model.monitor_.iter} iterations")
+        print(f"    Final log-likelihood: {model.score(X_monthly):.2f}")
+        print(f"    Consider:")
+        print(f"      - Using fewer states")
+        print(f"      - Increasing n_iter")
+        print(f"      - Running model selection again")
+    else:
+        print(f"[✓] Model converged after {model.monitor_.iter} iterations")
+        print(f"    Final log-likelihood: {model.score(X_monthly):.2f}")
 
     monthly_states = model.predict(X_monthly)
     posteriors = model.predict_proba(X_monthly)
@@ -82,26 +95,6 @@ def train_regime_hmm(df: pd.DataFrame, n_components: int = None) -> tuple[Gaussi
     labeled_df = labeled_df.join(df[other_cols], how='left')
 
     return model, labeled_df
-
-
-def classify_regime(row: pd.Series) -> tuple[str, str]:
-    growth = row["growth_yoy_zscore"]
-    cpi = row["cpi_yoy_zscore"]
-    unemp = row["unemployment_delta_zscore"]
-    yspread = row["yield_spread_delta_zscore"]
-    cspread = row["credit_spread_delta_zscore"]
-
-    if growth > 0.5 and unemp < 0 and yspread < 0 and cspread < 0:
-        return "Growth", "#2CA02C"
-
-    if growth < -0.5 and cpi < 0 and unemp > 0:
-        return "Slowdown / Shock", "#4FC3F7"
-
-    if growth < 0 and cpi > 0.5 and (yspread > 0 or cspread > 0):
-        return "Inflationary Stress", "#D62728"
-
-    return "Balanced", "#FFD966"
-
 
 def assign_regime_labels(labeled_df: pd.DataFrame, feature_cols: list) -> tuple[pd.DataFrame, dict, dict]:
     regime_means = labeled_df.groupby('inferred_regime')[feature_cols].mean()
@@ -262,31 +255,75 @@ def save_model_artifacts(model: GaussianHMM, labeled_df: pd.DataFrame, regime_na
     print(f"[+] Regime label mappings saved to: {label_map_path}")
 
     regime_stats = {}
+    MIN_OBSERVATIONS = 50
+    
     for regime in sorted(labeled_df['inferred_regime'].unique()):
         regime_data = labeled_df[labeled_df['inferred_regime'] == regime]
-
+        n_obs = len(regime_data)
+        
+        # Warn if regime is small
+        if n_obs < MIN_OBSERVATIONS:
+            print(f"⚠️  WARNING: Regime {regime} has only {n_obs} observations (< {MIN_OBSERVATIONS})")
+            print(f"    Statistics may be unreliable.")
+        
+        # Compute and validate equity statistics
+        equity_mean = float(regime_data['equity_return'].mean())
+        equity_std = float(regime_data['equity_return'].std())
+        
+        if not np.isfinite(equity_std) or equity_std < 1e-8:
+            print(f"⚠️  WARNING: Regime {regime} has invalid equity std: {equity_std}")
+            print(f"    Using global std dev as fallback")
+            equity_std = float(labeled_df['equity_return'].std())
+        
+        # Compute higher moments only if sufficient data
+        if n_obs >= 30:
+            equity_skew = float(regime_data['equity_return'].skew())
+            equity_kurt = float(regime_data['equity_return'].kurt())
+            
+            if not np.isfinite(equity_skew):
+                equity_skew = 0.0
+            if not np.isfinite(equity_kurt):
+                equity_kurt = 3.0
+        else:
+            equity_skew = 0.0
+            equity_kurt = 3.0
+        
+        # Compute and validate inflation statistics
+        if 'cpi_yoy' in regime_data:
+            inflation_mean = float(regime_data['cpi_yoy'].mean())
+            inflation_std = float(regime_data['cpi_yoy'].std())
+            
+            if not np.isfinite(inflation_std) or inflation_std < 1e-8:
+                print(f"⚠️  WARNING: Regime {regime} has invalid inflation std: {inflation_std}")
+                print(f"    Using global std dev as fallback")
+                inflation_std = float(labeled_df['cpi_yoy'].std())
+        else:
+            inflation_mean = 0.02
+            inflation_std = 0.01
+        
+        # Compute duration statistics
         regime_series = labeled_df['inferred_regime']
         run_id = (regime_series != regime_series.shift()).cumsum()
         durations = regime_series[regime_series == regime].groupby(run_id).size()
-
+        
         regime_stats[int(regime)] = {
             "label": regime_name_map[int(regime)],
-            "count": int(len(regime_data)),
-            "frequency": float(len(regime_data) / len(labeled_df)),
-
-            "equity_mean": float(regime_data['equity_return'].mean()),
-            "equity_std": float(regime_data['equity_return'].std()),
-            "equity_skew": float(regime_data['equity_return'].skew()),
-            "equity_kurt": float(regime_data['equity_return'].kurt()),
-
-            # NOTE: CPI YoY stored here; convert to monthly later in Monte Carlo
-            "inflation_mean": float(regime_data['cpi_yoy'].mean()) if 'cpi_yoy' in regime_data else None,
-            "inflation_std": float(regime_data['cpi_yoy'].std()) if 'cpi_yoy' in regime_data else None,
-
+            "count": int(n_obs),
+            "frequency": float(n_obs / len(labeled_df)),
+            "is_reliable": n_obs >= MIN_OBSERVATIONS,
+            
+            "equity_mean": equity_mean,
+            "equity_std": equity_std,
+            "equity_skew": equity_skew,
+            "equity_kurt": equity_kurt,
+            
+            "inflation_mean": inflation_mean,
+            "inflation_std": inflation_std,
+            
             "duration_mean": float(durations.mean()) if len(durations) else None,
             "duration_median": float(durations.median()) if len(durations) else None,
             "duration_std": float(durations.std()) if len(durations) else None,
-
+            
             "feature_profile": {
                 col: float(regime_data[col].mean())
                 for col in FEATURE_COLS if col in regime_data

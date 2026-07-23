@@ -1,0 +1,19 @@
+{
+  "initial_balance": 1960000,
+  "annual_withdrawal": 0,
+  "withdrawal_inflation_adjust": true,
+  "annual_contribution": 0,
+  "contribution_years": 0,
+  "target_end_balance": 0,
+  "failure_threshold": 0,
+  "annual_fee": 0.0025,
+  "portfolio_weights": {
+    "equity": 0.80,
+    "bonds": 0.20
+  },
+  "n_trials": 10000,
+  "n_years": 20,
+  "use_current_regime_probs": true,
+  "initial_regime": null,
+  "random_state": 1000000
+}
