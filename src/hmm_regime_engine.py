@@ -65,7 +65,6 @@ def train_regime_hmm(df: pd.DataFrame, n_components: int = None) -> tuple[Gaussi
     print(f"[*] Training {n_components}-state HMM (unsupervised initialization)...")
     model.fit(X_monthly)
     
-    # ADD CONVERGENCE CHECK:
     if not model.monitor_.converged:
         print(f"⚠️  WARNING: HMM did not converge after {model.monitor_.iter} iterations")
         print(f"    Final log-likelihood: {model.score(X_monthly):.2f}")
@@ -95,6 +94,7 @@ def train_regime_hmm(df: pd.DataFrame, n_components: int = None) -> tuple[Gaussi
     labeled_df = labeled_df.join(df[other_cols], how='left')
 
     return model, labeled_df
+
 
 def assign_regime_labels(labeled_df: pd.DataFrame, feature_cols: list) -> tuple[pd.DataFrame, dict, dict]:
     regime_means = labeled_df.groupby('inferred_regime')[feature_cols].mean()
@@ -235,8 +235,60 @@ def output_model_diagnostics(model: GaussianHMM, labeled_df: pd.DataFrame, featu
     returns_profile = labeled_df.groupby('inferred_regime')[['equity_return']].agg(['mean', 'std', 'count'])
     returns_profile.columns = ['mean', 'std', 'count']
     print(returns_profile.round(5))
+    
+    # Bond returns if available
+    if 'bond_return' in labeled_df.columns:
+        print("\n[+] Bond Returns per Regime:")
+        bond_profile = labeled_df.groupby('inferred_regime')[['bond_return']].agg(['mean', 'std', 'count'])
+        bond_profile.columns = ['mean', 'std', 'count']
+        print(bond_profile.round(5))
 
     print("=" * 60)
+
+
+def compute_regime_correlation_matrix(regime_data: pd.DataFrame, 
+                                     min_observations: int = 30) -> dict:
+    """
+    Compute correlation matrix for returns within a regime.
+    Includes equity, bonds (if available), and inflation.
+    Applies shrinkage for numerical stability.
+    """
+    # Select return columns
+    return_cols = []
+    if 'equity_return' in regime_data.columns:
+        return_cols.append('equity_return')
+    if 'bond_return' in regime_data.columns:
+        return_cols.append('bond_return')
+    if 'cpi_yoy' in regime_data.columns:
+        return_cols.append('cpi_yoy')
+    
+    if len(return_cols) < 2 or len(regime_data) < min_observations:
+        return None
+    
+    # Compute correlation matrix
+    corr_matrix = regime_data[return_cols].corr()
+    
+    # Check for NaN or invalid values
+    if corr_matrix.isnull().any().any():
+        return None
+    
+    # Validate positive definiteness
+    eigenvalues = np.linalg.eigvals(corr_matrix.values)
+    
+    if np.any(eigenvalues <= 1e-8):
+        print(f"    [!] Correlation matrix not positive definite. Applying shrinkage.")
+        # Ledoit-Wolf shrinkage towards identity
+        n_features = len(corr_matrix)
+        identity = np.eye(n_features)
+        shrinkage = 0.2
+        
+        corr_array = (1 - shrinkage) * corr_matrix.values + shrinkage * identity
+        corr_matrix = pd.DataFrame(corr_array, index=corr_matrix.index, columns=corr_matrix.columns)
+    
+    return {
+        'matrix': corr_matrix.values.tolist(),
+        'features': return_cols
+    }
 
 
 def save_model_artifacts(model: GaussianHMM, labeled_df: pd.DataFrame, regime_name_map: dict, regime_color_map: dict):
@@ -256,26 +308,38 @@ def save_model_artifacts(model: GaussianHMM, labeled_df: pd.DataFrame, regime_na
 
     regime_stats = {}
     MIN_OBSERVATIONS = 50
+    CRISIS_REGIME_MIN = 10
     
     for regime in sorted(labeled_df['inferred_regime'].unique()):
         regime_data = labeled_df[labeled_df['inferred_regime'] == regime]
         n_obs = len(regime_data)
+        regime_label = regime_name_map[int(regime)]
         
-        # Warn if regime is small
-        if n_obs < MIN_OBSERVATIONS:
-            print(f"⚠️  WARNING: Regime {regime} has only {n_obs} observations (< {MIN_OBSERVATIONS})")
+        is_crisis_regime = 'shock' in regime_label.lower() or 'crisis' in regime_label.lower()
+        min_threshold = CRISIS_REGIME_MIN if is_crisis_regime else MIN_OBSERVATIONS
+        
+        if n_obs < min_threshold:
+            print(f"⚠️  WARNING: Regime {regime} ({regime_label}) has only {n_obs} observations (< {min_threshold})")
             print(f"    Statistics may be unreliable.")
+        elif n_obs < MIN_OBSERVATIONS and is_crisis_regime:
+            print(f"ℹ️  NOTE: Regime {regime} ({regime_label}) has {n_obs} observations")
+            print(f"    This is acceptable for a crisis regime (rare events).")
         
-        # Compute and validate equity statistics
+        # Equity statistics
         equity_mean = float(regime_data['equity_return'].mean())
         equity_std = float(regime_data['equity_return'].std())
         
+        global_std = float(labeled_df['equity_return'].std())
         if not np.isfinite(equity_std) or equity_std < 1e-8:
             print(f"⚠️  WARNING: Regime {regime} has invalid equity std: {equity_std}")
             print(f"    Using global std dev as fallback")
-            equity_std = float(labeled_df['equity_return'].std())
+            equity_std = global_std
+        elif n_obs < 20 and equity_std < 0.01:
+            print(f"⚠️  WARNING: Regime {regime} has low std ({equity_std:.4f}) with only {n_obs} obs")
+            print(f"    Applying shrinkage toward global std")
+            equity_std = 0.7 * equity_std + 0.3 * global_std
         
-        # Compute higher moments only if sufficient data
+        # Higher moments
         if n_obs >= 30:
             equity_skew = float(regime_data['equity_return'].skew())
             equity_kurt = float(regime_data['equity_return'].kurt())
@@ -287,35 +351,60 @@ def save_model_artifacts(model: GaussianHMM, labeled_df: pd.DataFrame, regime_na
         else:
             equity_skew = 0.0
             equity_kurt = 3.0
+            if is_crisis_regime:
+                equity_skew = -0.5
+                equity_kurt = 5.0
         
-        # Compute and validate inflation statistics
+        # Inflation statistics
         if 'cpi_yoy' in regime_data:
             inflation_mean = float(regime_data['cpi_yoy'].mean())
             inflation_std = float(regime_data['cpi_yoy'].std())
             
+            global_inflation_std = float(labeled_df['cpi_yoy'].std())
             if not np.isfinite(inflation_std) or inflation_std < 1e-8:
                 print(f"⚠️  WARNING: Regime {regime} has invalid inflation std: {inflation_std}")
                 print(f"    Using global std dev as fallback")
-                inflation_std = float(labeled_df['cpi_yoy'].std())
+                inflation_std = global_inflation_std
         else:
             inflation_mean = 0.02
             inflation_std = 0.01
         
-        # Compute duration statistics
+        # Bond statistics (if available)
+        if 'bond_return' in regime_data.columns:
+            bond_mean = float(regime_data['bond_return'].mean())
+            bond_std = float(regime_data['bond_return'].std())
+            
+            global_bond_std = float(labeled_df['bond_return'].std())
+            if not np.isfinite(bond_std) or bond_std < 1e-8:
+                print(f"⚠️  WARNING: Regime {regime} has invalid bond std: {bond_std}")
+                print(f"    Using global std dev as fallback")
+                bond_std = global_bond_std
+        else:
+            bond_mean = None
+            bond_std = None
+        
+        # Duration statistics
         regime_series = labeled_df['inferred_regime']
         run_id = (regime_series != regime_series.shift()).cumsum()
         durations = regime_series[regime_series == regime].groupby(run_id).size()
+        
+        # Compute correlation matrix
+        correlation_data = compute_regime_correlation_matrix(regime_data)
         
         regime_stats[int(regime)] = {
             "label": regime_name_map[int(regime)],
             "count": int(n_obs),
             "frequency": float(n_obs / len(labeled_df)),
             "is_reliable": n_obs >= MIN_OBSERVATIONS,
+            "is_crisis_regime": is_crisis_regime,
             
             "equity_mean": equity_mean,
             "equity_std": equity_std,
             "equity_skew": equity_skew,
             "equity_kurt": equity_kurt,
+            
+            "bond_mean": bond_mean,
+            "bond_std": bond_std,
             
             "inflation_mean": inflation_mean,
             "inflation_std": inflation_std,
@@ -323,6 +412,9 @@ def save_model_artifacts(model: GaussianHMM, labeled_df: pd.DataFrame, regime_na
             "duration_mean": float(durations.mean()) if len(durations) else None,
             "duration_median": float(durations.median()) if len(durations) else None,
             "duration_std": float(durations.std()) if len(durations) else None,
+            
+            "correlation_matrix": correlation_data['matrix'] if correlation_data else None,
+            "correlation_features": correlation_data['features'] if correlation_data else None,
             
             "feature_profile": {
                 col: float(regime_data[col].mean())

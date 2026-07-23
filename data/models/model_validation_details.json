@@ -1,0 +1,98 @@
+{
+  "2": {
+    "is_valid": true,
+    "issues": [],
+    "warnings": [],
+    "metrics": {
+      "min_persistence": 0.9031075293170804,
+      "mean_persistence": 0.9425749893563832,
+      "min_regime_count": 47,
+      "regime_counts": {
+        "0": 201,
+        "1": 47
+      },
+      "min_regime_distance": 2.9530594035652253
+    }
+  },
+  "3": {
+    "is_valid": true,
+    "issues": [],
+    "warnings": [],
+    "metrics": {
+      "min_persistence": 0.9210515046086033,
+      "mean_persistence": 0.9472993894381916,
+      "min_regime_count": 25,
+      "regime_counts": {
+        "0": 25,
+        "1": 41,
+        "2": 182
+      },
+      "min_regime_distance": 1.1427835439064526
+    }
+  },
+  "4": {
+    "is_valid": true,
+    "issues": [],
+    "warnings": [
+      "Small regimes (< 25 obs): [1, 3] with counts [22, 20]"
+    ],
+    "metrics": {
+      "min_persistence": 0.8538377859591396,
+      "mean_persistence": 0.8995102546743338,
+      "min_regime_count": 20,
+      "regime_counts": {
+        "0": 158,
+        "1": 22,
+        "2": 48,
+        "3": 20
+      },
+      "min_regime_distance": 2.0625739726623356
+    }
+  },
+  "5": {
+    "is_valid": false,
+    "issues": [
+      "Deterministic states (persistence < 0.05): [0]",
+      "Critically small regimes (< 10 obs): [2] with counts [2]",
+      "Near-duplicate regimes (distance < 0.5): [(0, 1, 0.06793072108598601)]"
+    ],
+    "warnings": [],
+    "metrics": {
+      "min_persistence": 3.4988433567987476e-07,
+      "mean_persistence": 0.5213781971592694,
+      "min_regime_count": 2,
+      "regime_counts": {
+        "0": 89,
+        "1": 91,
+        "2": 2,
+        "3": 24,
+        "4": 42
+      },
+      "min_regime_distance": 0.06793072108598601
+    }
+  },
+  "6": {
+    "is_valid": false,
+    "issues": [
+      "Deterministic states (persistence < 0.05): [0, 3]",
+      "Critically small regimes (< 10 obs): [5] with counts [2]",
+      "Near-duplicate regimes (distance < 0.5): [(0, 3, 0.028992840165033895)]",
+      "Ping-pong pattern between states 0 and 3 (prob 0\u21923: 0.975, prob 3\u21920: 0.990)"
+    ],
+    "warnings": [],
+    "metrics": {
+      "min_persistence": 1.847528446035229e-06,
+      "mean_persistence": 0.5319096766772466,
+      "min_regime_count": 2,
+      "regime_counts": {
+        "0": 94,
+        "1": 20,
+        "2": 15,
+        "3": 92,
+        "4": 25,
+        "5": 2
+      },
+      "min_regime_distance": 0.028992840165033895
+    }
+  }
+}

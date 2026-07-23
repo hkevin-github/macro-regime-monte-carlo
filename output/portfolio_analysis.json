@@ -1,0 +1,24 @@
+{
+  "total_value": 2060482.4600000002,
+  "num_holdings": 1,
+  "asset_class_weights": {
+    "Cash": 0.07802895566303525,
+    "US_Equity": 0.7091017177732531,
+    "US_Bonds": 0.21286932656371169
+  },
+  "holdings": [
+    {
+      "ticker": "BIAPX",
+      "shares": 99157.0,
+      "price": 20.78,
+      "value": 2060482.4600000002,
+      "weight": 1.0,
+      "asset_class": "Multi_Asset_Fund",
+      "raw_exposure": {
+        "Cash": 0.07802895566303523,
+        "US_Equity": 0.709101717773253,
+        "US_Bonds": 0.21286932656371166
+      }
+    }
+  ]
+}

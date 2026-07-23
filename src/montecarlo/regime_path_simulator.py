@@ -35,10 +35,35 @@ class RegimePathSimulator:
             print(f"    Renormalization successful")
 
     def _compute_stationary_distribution(self) -> np.ndarray:
-        eigenvalues, eigenvectors = np.linalg.eig(self.transition_matrix.T)
-        stationary_idx = np.argmin(np.abs(eigenvalues - 1.0))
-        stationary = np.real(eigenvectors[:, stationary_idx])
+        """
+        Compute stationary distribution by solving the linear system.
+        More numerically stable than eigenvector extraction.
+        """
+        P = np.asarray(self.transition_matrix, dtype=float)
+        n = P.shape[0]
+        
+        # Solve: (P^T - I) π = 0 subject to sum(π) = 1
+        A = P.T - np.eye(n)
+        A[-1, :] = np.ones(n)
+        b = np.zeros(n)
+        b[-1] = 1.0
+        
+        try:
+            stationary = np.linalg.solve(A, b)
+        except np.linalg.LinAlgError:
+            # Fallback to least-squares if singular
+            stationary, _, _, _ = np.linalg.lstsq(A, b, rcond=None)
+        
+        # Enforce non-negativity and normalization
+        stationary = np.clip(stationary, 0.0, None)
         stationary = stationary / stationary.sum()
+        
+        # Validate
+        if not np.allclose(stationary.sum(), 1.0, atol=1e-10):
+            raise ValueError("Stationary distribution does not sum to 1")
+        if np.any(stationary < -1e-10):
+            raise ValueError("Stationary distribution has negative entries")
+        
         return stationary
 
     def simulate_path(self,
@@ -51,6 +76,12 @@ class RegimePathSimulator:
         if initial_regime is None:
             if initial_probs is None:
                 initial_probs = self._compute_stationary_distribution()
+            else:
+                # Validate and normalize initial_probs
+                initial_probs = np.asarray(initial_probs, dtype=float)
+                initial_probs = np.clip(initial_probs, 0.0, None)
+                initial_probs = initial_probs / initial_probs.sum()
+            
             initial_regime = rng.choice(self.n_regimes, p=initial_probs)
 
         path = np.zeros(n_periods, dtype=int)

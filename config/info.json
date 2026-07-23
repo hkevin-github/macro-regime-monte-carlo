@@ -1,0 +1,20 @@
+{
+  "simulation": {
+    "n_trials": 10000,
+    "n_years": 20,
+    "random_seed": 42
+  },
+  "portfolio": {
+    "annual_contribution": 0,
+    "annual_withdrawal": 0,
+    "contribution_years": 0,
+    "withdrawal_inflation_adjust": true,
+    "annual_fee": 0.0,
+    "failure_threshold": 0.0,
+    "target_end_balance": 0.0
+  },
+  "output": {
+    "save_all_paths": false,
+    "output_dir": "output"
+  }
+}
