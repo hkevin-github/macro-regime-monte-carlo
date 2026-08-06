@@ -1,23 +1,81 @@
 {
-  "total_value": 2108077.8200000003,
-  "num_holdings": 1,
+  "total_value": 673587.925,
+  "num_holdings": 6,
   "asset_class_weights": {
-    "Cash": 0.07802895566303525,
-    "US_Equity": 0.7091017177732531,
-    "US_Bonds": 0.21286932656371169
+    "US_Bonds": 0.15751697546080898,
+    "US_Equity": 0.42039946010017915,
+    "Cash": 0.0009998209915621171,
+    "Real_Estate": 0.1460388411802364,
+    "International_Equity": 0.1286469023327578,
+    "Commodities": 0.14639799993445546
   },
   "holdings": [
     {
-      "ticker": "BIAPX",
-      "shares": 99157.0,
-      "price": 21.26,
-      "value": 2108077.8200000003,
-      "weight": 1.0,
+      "ticker": "AGG",
+      "shares": 1000.0,
+      "price": 97.525,
+      "value": 97525.0,
+      "weight": 0.14478436501069997,
+      "asset_class": "US_Bonds",
+      "raw_exposure": {
+        "US_Bonds": 1.0
+      }
+    },
+    {
+      "ticker": "VOO",
+      "shares": 400.0,
+      "price": 707.94,
+      "value": 283176.0,
+      "weight": 0.42039946010017915,
+      "asset_class": "US_Equity",
+      "raw_exposure": {
+        "US_Equity": 1.0
+      }
+    },
+    {
+      "ticker": "RPIFX",
+      "shares": 1000.0,
+      "price": 9.25,
+      "value": 9250.0,
+      "weight": 0.013732431441671107,
       "asset_class": "Multi_Asset_Fund",
       "raw_exposure": {
-        "Cash": 0.07802895566303523,
-        "US_Equity": 0.709101717773253,
-        "US_Bonds": 0.21286932656371166
+        "Cash": 0.07280728076516423,
+        "US_Equity": 0.0,
+        "US_Bonds": 0.9271927192348358
+      }
+    },
+    {
+      "ticker": "VNQ",
+      "shares": 1000.0,
+      "price": 98.37,
+      "value": 98370.0,
+      "weight": 0.1460388411802364,
+      "asset_class": "Real_Estate",
+      "raw_exposure": {
+        "Real_Estate": 1.0
+      }
+    },
+    {
+      "ticker": "VXUS",
+      "shares": 1000.0,
+      "price": 86.655,
+      "value": 86655.0,
+      "weight": 0.1286469023327578,
+      "asset_class": "International_Equity",
+      "raw_exposure": {
+        "International_Equity": 1.0
+      }
+    },
+    {
+      "ticker": "PDBC",
+      "shares": 5755.0,
+      "price": 17.135,
+      "value": 98611.925,
+      "weight": 0.14639799993445546,
+      "asset_class": "Commodities",
+      "raw_exposure": {
+        "Commodities": 1.0
       }
     }
   ]

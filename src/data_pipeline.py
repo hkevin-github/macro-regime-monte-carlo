@@ -11,7 +11,15 @@ Yield Curve       -> GS10 - TB3MS     -> FRED           -> Monthly -> 1953 - Pre
 Credit Risk       -> BAA - GS10       -> FRED           -> Monthly -> 1953 - Present
 Labor             -> UNRATE           -> FRED           -> Monthly -> 1953 - Present
 Equity Returns    -> ^GSPC            -> Yahoo Finance  -> Monthly -> 1953 - Present
-Bond Returns      -> AGG              -> Yahoo Finance  -> Monthly -> 2003 - Present
+Bond Returns      -> GS10 (synthetic) -> FRED           -> Monthly -> 1953 - Present
+                     AGG (real, short)-> Yahoo Finance  -> Monthly -> 2003 - Present
+
+Bond returns are now built primarily from a synthetic constant-maturity 10-year
+Treasury total-return proxy derived from FRED's GS10 yield series (see
+synthesize_treasury_returns_from_yield below), which matches the 1953+ horizon of
+the rest of the macro dataset. The real AGG ETF series is still fetched and used
+to validate/patch recent months where available, since it reflects actual traded
+returns rather than an approximation -- see merge_bond_return_sources.
 
 All series are aligned on a monthly calendar (Period[M]) so that macro releases,
 equity returns, and Fama-French factors line up on the same monthly timeline.
@@ -126,6 +134,108 @@ def fetch_bond_returns(start_date: str, end_date: str) -> pd.DataFrame:
         print(f"[!] AGG fetch failed: {e}")
         print(f"[!] Bond data will not be available. Simulator will use proxy model.")
         return pd.DataFrame()
+
+
+def synthesize_treasury_returns_from_yield(api_key: str, start_date: str, end_date: str) -> pd.DataFrame:
+    """
+    Builds a synthetic constant-maturity 10-year Treasury MONTHLY total-return series
+    from FRED's GS10 yield series, back to 1953 -- matching the horizon of the rest
+    of the macro dataset (unlike AGG, which only starts in 2003).
+
+    This is a standard duration-based total-return approximation used widely in
+    academic/practitioner long-run bond-return work when a real total-return index
+    isn't available for the full window:
+
+        duration[t]      ~= 1 / yield[t]                  (rough constant-maturity
+                                                             duration approximation)
+        price_return[t]  ~= -duration[t-1] * (yield[t] - yield[t-1])
+        income_return[t] ~=  yield[t-1] / 12
+        total_return[t]  ~=  price_return[t] + income_return[t]
+
+    IMPORTANT CAVEATS (documented explicitly, not hidden):
+    - This is a CONSTRUCTED PROXY, not a measured total-return index. It approximates
+      a constant-maturity 10-year Treasury, not a diversified aggregate bond fund
+      like AGG (no corporate credit, no MBS, different duration profile).
+    - The duration approximation (1 / yield) is a simplification; it does not account
+      for convexity or the true cash-flow structure of an actual 10-year note.
+    - Because it is duration-based and 10Y-specific, this proxy will show MORE
+      interest-rate sensitivity (higher volatility) than AGG did historically,
+      particularly during the high-rate-volatility 1970s-1980s. This is expected
+      and is arguably more representative of true long-duration Treasury risk in
+      those regimes than assuming AGG-like behavior would have applied.
+    """
+    print(f"[*] Synthesizing constant-maturity 10Y Treasury returns from GS10 (1953+ proxy)...")
+    normalized_key = normalize_api_key(api_key)
+    try:
+        fred = Fred(api_key=normalized_key)
+        yields = fred.get_series('GS10', observation_start=start_date, observation_end=end_date)
+        yields.index = pd.to_datetime(yields.index)
+
+        monthly_yield = yields.resample('ME').last() / 100.0  # decimal, e.g. 0.045
+        monthly_yield = monthly_yield.dropna()
+
+        prev_yield = monthly_yield.shift(1)
+        duration = 1.0 / prev_yield.replace(0, np.nan)
+
+        price_return = -duration * (monthly_yield - prev_yield)
+        income_return = prev_yield / 12.0
+
+        total_return = (price_return + income_return).dropna()
+        total_return.index = total_return.index.to_period('M')
+        total_return.name = 'bond_return_synthetic'
+
+        print(f"[+] Synthesized Treasury proxy: {len(total_return)} months, "
+              f"starts {total_return.index.min()}")
+        return total_return.to_frame()
+
+    except Exception as e:
+        print(f"[!] Synthetic Treasury return construction failed: {e}")
+        print(f"[!] Falling back to AGG-only bond coverage (2003+).")
+        return pd.DataFrame()
+
+
+def merge_bond_return_sources(synthetic_df: pd.DataFrame, agg_df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Combines the long-horizon synthetic Treasury proxy (1953+) with the real AGG
+    ETF series (2003+) into a single 'bond_return' column spanning the full window.
+
+    Preference logic: use REAL AGG returns wherever they exist (they reflect actual
+    traded fund performance, including credit/MBS exposure and true fund-level
+    duration), and fall back to the synthetic GS10-based proxy for months before
+    AGG's 2003 inception. This is flagged via a 'bond_return_source' column so
+    downstream consumers can see which months are real vs. synthetic if needed.
+    """
+    if synthetic_df.empty and agg_df.empty:
+        print("[!] No bond data available from either source.")
+        return pd.DataFrame()
+
+    if synthetic_df.empty:
+        print("[!] No synthetic Treasury proxy available; using AGG-only coverage.")
+        out = agg_df.rename(columns={'bond_return': 'bond_return'}).copy()
+        out['bond_return_source'] = 'agg'
+        return out[['bond_return', 'bond_return_source']]
+
+    if agg_df.empty:
+        print("[!] No AGG data available; using synthetic Treasury proxy only.")
+        out = synthetic_df.rename(columns={'bond_return_synthetic': 'bond_return'}).copy()
+        out['bond_return_source'] = 'synthetic_gs10'
+        return out[['bond_return', 'bond_return_source']]
+
+    merged = synthetic_df.join(agg_df, how='outer')
+    merged['bond_return'] = merged['bond_return'].combine_first(merged['bond_return_synthetic'])
+    merged['bond_return_source'] = np.where(
+        merged['bond_return'].notna() & merged.index.isin(agg_df.index),
+        'agg',
+        'synthetic_gs10',
+    )
+
+    n_agg = int((merged['bond_return_source'] == 'agg').sum())
+    n_synthetic = int((merged['bond_return_source'] == 'synthetic_gs10').sum())
+    print(f"[+] Merged bond return sources: {n_agg} months real AGG, "
+          f"{n_synthetic} months synthetic GS10 proxy, "
+          f"full range {merged.index.min()} to {merged.index.max()}")
+
+    return merged[['bond_return', 'bond_return_source']].dropna(subset=['bond_return'])
 
 
 def fetch_fama_french_factors(start_date: str, end_date: str) -> pd.DataFrame:
@@ -334,7 +444,12 @@ def transform_and_align_pipeline(asset_df: pd.DataFrame,
         asset_df: Equity returns
         ff_df: Fama-French factors
         macro_df: Macro indicators
-        bond_df: Bond returns (optional)
+        bond_df: Bond returns (optional). Merged via LEFT JOIN (see step 4a below)
+            rather than the core concat/dropna, so that bond coverage does NOT
+            truncate the 1953+ training window -- this now spans the merged
+            synthetic-GS10 (1953+) and real-AGG (2003+) series from
+            merge_bond_return_sources, so coverage should be full-history in
+            practice, but the join stays defensive in case bond_df is ever partial.
         extended_df: Extended asset-class return proxies -- international equity,
             real estate, commodities (optional). Merged via LEFT JOIN after the core
             dropna() step so that these shorter-history columns do NOT truncate the
@@ -357,16 +472,11 @@ def transform_and_align_pipeline(asset_df: pd.DataFrame,
 
     macro_stationed = macro_stationed.dropna()
 
-    # 2. Concatenate all datasets on shared monthly Period[M] index
+    # 2. Concatenate CORE datasets only (equity, Fama-French, macro) on shared
+    #    monthly Period[M] index. Bonds are intentionally NOT included here anymore
+    #    -- see step 4a -- so that partial bond coverage can never truncate the
+    #    core 1953+ training window the way AGG's 2003 inception used to.
     dataframes_to_concat = [asset_df, ff_df, macro_stationed]
-    
-    # Add bonds if available
-    if bond_df is not None and not bond_df.empty:
-        dataframes_to_concat.append(bond_df)
-        print("[+] Including bond returns in dataset")
-    else:
-        print("[!] No bond data available - simulator will use proxy model")
-    
     master_matrix = pd.concat(dataframes_to_concat, axis=1).dropna()
 
     # 3. CAUSAL Feature Standardization via Expanding-Window Z-Score
@@ -383,7 +493,19 @@ def transform_and_align_pipeline(asset_df: pd.DataFrame,
     # Drop rows where z-scores couldn't be computed
     master_matrix = master_matrix.dropna(subset=[f'{c}_zscore' for c in macro_cols])
 
-    # 4. Left-join extended asset-class return proxies (international, real estate,
+    # 4a. Left-join bond returns (merged synthetic GS10 1953+ / real AGG 2003+ series
+    #     from merge_bond_return_sources). Left-joined rather than concatenated into
+    #     the core dropna() step above, so that any remaining gaps in bond coverage
+    #     cannot truncate the core 1953+ macro/equity training window the way AGG's
+    #     2003 inception used to when bonds were part of the hard concat.
+    if bond_df is not None and not bond_df.empty:
+        master_matrix = master_matrix.join(bond_df, how='left')
+        n_bond_obs = master_matrix['bond_return'].notna().sum() if 'bond_return' in master_matrix.columns else 0
+        print(f"[+] Merged bond returns (non-null months): {n_bond_obs} of {len(master_matrix)}")
+    else:
+        print("[!] No bond data available - simulator will use proxy model")
+
+    # 4b. Left-join extended asset-class return proxies (international, real estate,
     #    commodities). These have shorter histories than the core matrix, so this
     #    intentionally introduces NaNs for the pre-inception months of each series
     #    rather than dropping rows -- the core 1953+ training window is preserved.
@@ -409,7 +531,11 @@ def run_data_pipeline(fred_key: str, start: str = "1953-04-01", end: str = "2026
     equity_returns = fetch_yahoo_returns(start, end)
     ff_factors = fetch_fama_french_factors(start, end)
     fred_macro = fetch_fred_macro(fred_key, start, end)
-    bond_returns = fetch_bond_returns(start, end)
+
+    agg_bond_returns = fetch_bond_returns(start, end)
+    synthetic_bond_returns = synthesize_treasury_returns_from_yield(fred_key, start, end)
+    bond_returns = merge_bond_return_sources(synthetic_bond_returns, agg_bond_returns)
+
     extended_returns = fetch_extended_asset_returns(fred_key, start, end)
 
     aligned_dataset = transform_and_align_pipeline(

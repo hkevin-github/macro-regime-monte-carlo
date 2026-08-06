@@ -2,6 +2,6 @@
   "recommended_states": 4,
   "recommendation_reason": "best_bic_and_valid",
   "best_bic": 4,
-  "best_aic": 4,
+  "best_aic": 6,
   "best_valid_bic": 4
 }

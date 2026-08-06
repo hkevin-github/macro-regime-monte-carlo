@@ -4,99 +4,98 @@
     "issues": [],
     "warnings": [],
     "metrics": {
-      "min_persistence": 0.9031456684458371,
-      "mean_persistence": 0.942623918313144,
-      "min_regime_count": 47,
+      "min_persistence": 0.9690748770744829,
+      "mean_persistence": 0.9758133034587487,
+      "min_regime_count": 326,
       "regime_counts": {
-        "0": 202,
-        "1": 47
+        "0": 326,
+        "1": 517
       },
-      "min_regime_distance": 2.9499996993405273
+      "min_regime_distance": 1.8488300464325764
     }
   },
   "3": {
-    "is_valid": false,
-    "issues": [
-      "Deterministic states (persistence < 0.05): [0, 1]",
-      "Near-duplicate regimes (distance < 0.5): [(0, 1, 0.06206963524030607)]",
-      "Ping-pong pattern between states 0 and 1 (prob 0\u21921: 1.000, prob 1\u21920: 0.960)"
-    ],
+    "is_valid": true,
+    "issues": [],
     "warnings": [],
     "metrics": {
-      "min_persistence": 0.00043242931370133543,
-      "mean_persistence": 0.3055992986513791,
-      "min_regime_count": 46,
+      "min_persistence": 0.9029125930956559,
+      "mean_persistence": 0.9548875938105595,
+      "min_regime_count": 31,
       "regime_counts": {
-        "0": 100,
-        "1": 103,
-        "2": 46
+        "0": 524,
+        "1": 288,
+        "2": 31
       },
-      "min_regime_distance": 0.06206963524030607
+      "min_regime_distance": 2.029573674110754
     }
   },
   "4": {
     "is_valid": true,
     "issues": [],
     "warnings": [
-      "Small regimes (< 25 obs): [2] with counts [18]"
+      "Small regimes (< 25 obs): [3] with counts [12]"
     ],
     "metrics": {
-      "min_persistence": 0.8810590878288097,
-      "mean_persistence": 0.9136736710038914,
-      "min_regime_count": 18,
+      "min_persistence": 0.9073797335737054,
+      "mean_persistence": 0.9433641566029063,
+      "min_regime_count": 12,
       "regime_counts": {
-        "0": 67,
-        "1": 27,
-        "2": 18,
-        "3": 137
+        "0": 522,
+        "1": 108,
+        "2": 201,
+        "3": 12
       },
-      "min_regime_distance": 1.1374814463978882
+      "min_regime_distance": 1.9656566662608546
     }
   },
   "5": {
     "is_valid": false,
     "issues": [
-      "Deterministic states (persistence < 0.05): [0]",
-      "Critically small regimes (< 10 obs): [4] with counts [2]",
-      "Near-duplicate regimes (distance < 0.5): [(0, 1, 0.060998548233402346)]"
+      "Deterministic states (persistence < 0.05): [0, 4]",
+      "Near-duplicate regimes (distance < 0.5): [(0, 4, 0.023486966252729103)]",
+      "Ping-pong pattern between states 0 and 4 (prob 0\u21924: 0.969, prob 4\u21920: 0.956)"
     ],
-    "warnings": [],
+    "warnings": [
+      "Small regimes (< 25 obs): [2] with counts [21]"
+    ],
     "metrics": {
-      "min_persistence": 7.473339920469416e-09,
-      "mean_persistence": 0.5406711630917059,
-      "min_regime_count": 2,
+      "min_persistence": 9.65836824277975e-08,
+      "mean_persistence": 0.5647791705706926,
+      "min_regime_count": 21,
       "regime_counts": {
-        "0": 86,
-        "1": 94,
-        "2": 42,
-        "3": 25,
-        "4": 2
+        "0": 257,
+        "1": 184,
+        "2": 21,
+        "3": 125,
+        "4": 256
       },
-      "min_regime_distance": 0.060998548233402346
+      "min_regime_distance": 0.023486966252729103
     }
   },
   "6": {
     "is_valid": false,
     "issues": [
-      "Deterministic states (persistence < 0.05): [0, 3]",
-      "Critically small regimes (< 10 obs): [5] with counts [2]",
-      "Near-duplicate regimes (distance < 0.5): [(0, 3, 0.03054348718598125)]",
-      "Ping-pong pattern between states 0 and 3 (prob 0\u21923: 0.975, prob 3\u21920: 0.990)"
+      "Deterministic states (persistence < 0.05): [0, 2]",
+      "Near-duplicate regimes (distance < 0.5): [(0, 2, 0.13337985574971986)]",
+      "Ping-pong pattern between states 0 and 2 (prob 0\u21922: 0.917, prob 2\u21920: 0.998)"
     ],
-    "warnings": [],
+    "warnings": [
+      "Small regimes (< 25 obs): [3] with counts [12]"
+    ],
     "metrics": {
-      "min_persistence": 1.9664543208064347e-06,
-      "mean_persistence": 0.5319354694744046,
-      "min_regime_count": 2,
+      "min_persistence": 2.8509911449770273e-08,
+      "mean_persistence": 0.618817296943203,
+      "min_regime_count": 12,
       "regime_counts": {
         "0": 95,
-        "1": 20,
-        "2": 15,
-        "3": 92,
-        "4": 25,
-        "5": 2
+        "1": 26,
+        "2": 88,
+        "3": 12,
+        "4": 111,
+        "5": 511
       },
-      "min_regime_distance": 0.03054348718598125
+      "min_regime_distance": 0.13337985574971986
     }
   }
 }

@@ -1,14 +1,14 @@
 {
   "regime_names": {
-    "0": "Inflationary",
+    "0": "Balanced",
     "1": "Crisis",
-    "2": "Shock",
-    "3": "Low Volatility"
+    "2": "Inflationary",
+    "3": "Shock"
   },
   "regime_colors": {
-    "0": "#FFC107",
+    "0": "#9E9E9E",
     "1": "#D62728",
-    "2": "#4FC3F7",
-    "3": "#FFD966"
+    "2": "#FFC107",
+    "3": "#4FC3F7"
   }
 }
