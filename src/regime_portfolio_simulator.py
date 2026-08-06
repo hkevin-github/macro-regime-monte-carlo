@@ -23,6 +23,7 @@ class RegimeMultiAssetSimulator:
     ASSET_CLASS_MAPPING = {
         'US_Equity': 'equity',
         'International_Equity': 'equity',
+        'Emerging_Markets_Equity': 'equity',
         'US_Bonds': 'bonds',
         'International_Bonds': 'bonds',
         'Real_Estate': 'equity',
@@ -171,23 +172,29 @@ class RegimeMultiAssetSimulator:
             # Map samples back to asset classes
             period_return = 0.0
             for asset_class, weight in asset_class_weights.items():
-                if asset_class in ('US_Equity', 'International_Equity', 'Real_Estate', 'Commodities'):
+                stats_key = self.ASSET_CLASS_MAPPING.get(asset_class, 'cash')
+
+                if stats_key == 'equity':
                     if 'equity_return' in features:
                         idx = features.index('equity_return')
                         period_return += weight * samples[idx]
-                elif asset_class == 'US_Bonds':
+                    else:
+                        params = self.get_asset_class_params(asset_class, regime)
+                        period_return += weight * rng.normal(params['mean'], params['std'])
+                elif stats_key == 'bonds':
                     if 'bond_return' in features:
                         idx = features.index('bond_return')
                         period_return += weight * samples[idx]
                     else:
-                        # Fallback to independent bond sampling
                         params = self.get_asset_class_params(asset_class, regime)
                         period_return += weight * rng.normal(params['mean'], params['std'])
-                elif asset_class == 'Cash':
+                elif stats_key == 'cash':
                     period_return += weight * 0.0
-            
+                else:
+                    params = self.get_asset_class_params(asset_class, regime)
+                    period_return += weight * rng.normal(params['mean'], params['std'])
+
             return float(period_return)
-            
         except np.linalg.LinAlgError:
             # Fallback if covariance matrix is singular
             return self._sample_independent_portfolio(asset_class_weights, regime, rng)
@@ -214,6 +221,10 @@ class RegimeMultiAssetSimulator:
                       n_years: int,
                       annual_contribution: float = 0.0,
                       annual_withdrawal: float = 0.0,
+                      annual_fee: float = 0.0,
+                      contribution_years: int = 0,
+                      failure_threshold: float = 0.0,
+                      target_end_balance: float = 0.0,
                       random_state: int = 42) -> Dict:
         """
         Run Monte Carlo simulation for a multi-asset portfolio.
@@ -225,6 +236,10 @@ class RegimeMultiAssetSimulator:
             n_years: Simulation horizon in years
             annual_contribution: Annual contribution (added at start of year)
             annual_withdrawal: Annual withdrawal (taken at start of year)
+            annual_fee: Annual portfolio fee rate
+            contribution_years: Number of years to contribute
+            failure_threshold: Portfolio value below which a trial fails
+            target_end_balance: Required final balance for success
             random_state: Random seed
             
         Returns:
@@ -253,6 +268,12 @@ class RegimeMultiAssetSimulator:
         # Get initial regime distribution
         initial_probs = self.assumptions.get_current_regime_probabilities()
         
+        monthly_contribution = annual_contribution / 12
+        monthly_withdrawal = annual_withdrawal / 12
+        monthly_fee_rate = annual_fee / 12
+        contribution_months = int(contribution_years) * 12
+        all_success = np.ones(n_trials, dtype=bool)
+
         for trial in range(n_trials):
             if trial % 1000 == 0:
                 print(f"  Trial {trial:,}/{n_trials:,}")
@@ -279,23 +300,28 @@ class RegimeMultiAssetSimulator:
             balance = initial_balance
             all_balances[trial, 0] = balance
             
-            monthly_contribution = annual_contribution / 12
-            monthly_withdrawal = annual_withdrawal / 12
-            
             for month in range(n_months):
-                # Apply contribution/withdrawal
-                balance += monthly_contribution - monthly_withdrawal
+                if month < contribution_months:
+                    balance += monthly_contribution
                 
-                # Apply return
+                balance -= monthly_withdrawal
                 balance *= (1 + returns[month])
+                balance *= (1.0 - monthly_fee_rate)
                 
-                # Store
+                if balance < failure_threshold:
+                    all_success[trial] = False
+                    balance = 0.0
+                    all_balances[trial, month + 1:] = 0.0
+                    break
+                
                 all_balances[trial, month + 1] = balance
             
             final_balances[trial] = balance
+            if balance <= 0 or balance < target_end_balance:
+                all_success[trial] = False
         
         # Compute statistics
-        success_rate = np.mean(final_balances > 0)
+        success_rate = float(np.mean(all_success))
         
         results = {
             'all_balances': all_balances,

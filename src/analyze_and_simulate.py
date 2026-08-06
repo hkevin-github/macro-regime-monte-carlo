@@ -163,8 +163,12 @@ def main():
     # Command-line arguments override config file
     n_years = args.years if args.years is not None else config["simulation"]["n_years"]
     n_trials = args.trials if args.trials is not None else config["simulation"]["n_trials"]
-    annual_contribution = args.contribution if args.contribution is not None else config["portfolio"]["annual_contribution"]
-    annual_withdrawal = args.withdrawal if args.withdrawal is not None else config["portfolio"]["annual_withdrawal"]
+    annual_contribution = args.contribution if args.contribution is not None else config["portfolio"].get("annual_contribution", 0.0)
+    annual_withdrawal = args.withdrawal if args.withdrawal is not None else config["portfolio"].get("annual_withdrawal", 0.0)
+    annual_fee = config["portfolio"].get("annual_fee", 0.0)
+    contribution_years = int(config["portfolio"].get("contribution_years", 0))
+    failure_threshold = config["portfolio"].get("failure_threshold", 0.0)
+    target_end_balance = config["portfolio"].get("target_end_balance", 0.0)
     output_dir = Path(args.output if args.output is not None else config["output"]["output_dir"])
     random_seed = config["simulation"]["random_seed"]
 
@@ -196,6 +200,10 @@ def main():
         n_years=n_years,
         annual_contribution=annual_contribution,
         annual_withdrawal=annual_withdrawal,
+        annual_fee=annual_fee,
+        contribution_years=contribution_years,
+        failure_threshold=failure_threshold,
+        target_end_balance=target_end_balance,
         random_state=random_seed,
     )
 

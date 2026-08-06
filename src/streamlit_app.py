@@ -236,6 +236,11 @@ with st.sidebar:
         step=1000.0,
     )
 
+    annual_fee = float(config["portfolio"].get("annual_fee", 0.0))
+    contribution_years = int(config["portfolio"].get("contribution_years", 0))
+    failure_threshold = float(config["portfolio"].get("failure_threshold", 0.0))
+    target_end_balance = float(config["portfolio"].get("target_end_balance", 0.0))
+
     random_seed = st.number_input(
         "Random Seed",
         min_value=0,
@@ -294,6 +299,10 @@ if run_button:
                     n_years=int(n_years),
                     annual_contribution=float(annual_contribution),
                     annual_withdrawal=float(annual_withdrawal),
+                    annual_fee=annual_fee,
+                    contribution_years=contribution_years,
+                    failure_threshold=failure_threshold,
+                    target_end_balance=target_end_balance,
                     random_state=int(random_seed),
                 )
                 st.session_state.results = results
