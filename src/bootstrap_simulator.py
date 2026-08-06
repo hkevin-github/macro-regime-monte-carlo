@@ -100,13 +100,14 @@ class BootstrapMonteCarloSimulator:
                     balance += annual_contribution / 12
                 balance -= annual_withdrawal / 12
                 
-                # Can't go negative
-                balance = max(0, balance)
+                # Allow negative balance (withdrawal debt)
+                # balance = max(0, balance)  # Removed floor
                 
                 all_balances[trial, month_idx + 1] = balance
                 
-                if balance <= 0:
-                    break
+                # Continue tracking even if negative
+                # if balance <= 0:
+                #     break
         
         # Calculate metrics
         final_balances = all_balances[:, -1]

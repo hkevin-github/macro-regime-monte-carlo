@@ -338,8 +338,12 @@ if run_button:
     else:
         with st.spinner("Running regime-aware and bootstrap simulations..."):
             try:
-                # Load historical data
-                historical_data = pd.read_csv("data/processed/regime_labeled_dataset.csv")
+                # Load historical data with date index
+                historical_data = pd.read_csv(
+                    "data/processed/regime_labeled_dataset.csv",
+                    index_col='date',
+                    parse_dates=True
+                )
                 
                 # 1) Portfolio analysis
                 analyzer = PortfolioAnalyzer()
@@ -364,7 +368,12 @@ if run_button:
                 st.session_state.regime_results = regime_results
 
                 # 3) Bootstrap simulation
-                bootstrap_simulator = BootstrapMonteCarloSimulator(historical_data)
+                # Filter to only required columns for bootstrap
+                bootstrap_data = historical_data[['equity_return', 'bond_return']].dropna()
+                if len(bootstrap_data) == 0:
+                    raise ValueError("No valid historical data for bootstrap simulation")
+                
+                bootstrap_simulator = BootstrapMonteCarloSimulator(bootstrap_data)
                 bootstrap_results = bootstrap_simulator.run_simulation(
                     asset_class_weights=summary["asset_class_weights"],
                     initial_balance=summary["total_value"],

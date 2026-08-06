@@ -238,6 +238,84 @@ def merge_bond_return_sources(synthetic_df: pd.DataFrame, agg_df: pd.DataFrame) 
     return merged[['bond_return', 'bond_return_source']].dropna(subset=['bond_return'])
 
 
+def create_aggregate_bond_returns(df: pd.DataFrame, vbmfx_series: pd.Series | None = None) -> pd.DataFrame:
+    """
+    Transform the synthetic/AGG bond proxy into a more aggregate-bond-like series.
+
+    The transformation applies three phases:
+    - 1956-1975: dampen the long-term Treasury proxy and blend with RF
+    - 1976-1985: dampen the long-term Treasury proxy and blend with RF
+    - 1986 onward: use VBMFX returns when available, otherwise fall back to a
+      dampened Treasury/RF blend.
+    """
+    if df.empty or 'bond_return' not in df.columns:
+        return df.copy()
+
+    transformed = df.copy()
+    transformed['bond_return_original'] = transformed['bond_return'].copy()
+
+    if 'date' in transformed.columns:
+        transformed['date'] = pd.to_datetime(transformed['date'])
+        transformed = transformed.set_index('date')
+    else:
+        transformed.index = pd.to_datetime(transformed.index)
+
+    aggregate_returns = transformed['bond_return'].copy()
+
+    rf_values = transformed['RF'] if 'RF' in transformed.columns else pd.Series(np.nan, index=transformed.index)
+
+    phase1_mask = (transformed.index >= '1956-01-01') & (transformed.index < '1976-01-01')
+    if phase1_mask.any():
+        dampened_1 = transformed.loc[phase1_mask, 'bond_return'] * 0.65
+        aggregate_returns.loc[phase1_mask] = (
+            0.6 * dampened_1 + 0.4 * rf_values.loc[phase1_mask]
+        )
+
+    phase2_mask = (transformed.index >= '1976-01-01') & (transformed.index < '1986-01-01')
+    if phase2_mask.any():
+        dampened_2 = transformed.loc[phase2_mask, 'bond_return'] * 0.70
+        aggregate_returns.loc[phase2_mask] = (
+            0.7 * dampened_2 + 0.3 * rf_values.loc[phase2_mask]
+        )
+
+    phase3_mask = transformed.index >= '1986-01-01'
+    if phase3_mask.any():
+        if vbmfx_series is not None:
+            aligned_vbmfx = pd.Series(vbmfx_series.values, index=pd.to_datetime(vbmfx_series.index))
+            aligned_vbmfx = aligned_vbmfx.reindex(transformed.index)
+            aggregate_returns.loc[phase3_mask] = aligned_vbmfx.loc[phase3_mask]
+        else:
+            try:
+                vbmfx = yf.download('VBMFX', start='1986-01-01', progress=False)
+                if isinstance(vbmfx.columns, pd.MultiIndex):
+                    vbmfx.columns = vbmfx.columns.get_level_values(0)
+                price_column = 'Adj Close' if 'Adj Close' in vbmfx.columns else 'Close'
+                monthly_close = vbmfx[price_column].resample('ME').last()
+                monthly_returns = monthly_close.pct_change().dropna()
+                monthly_returns.index = pd.to_datetime(monthly_returns.index)
+                aligned_vbmfx = pd.Series(monthly_returns.values, index=monthly_returns.index)
+                aligned_vbmfx = aligned_vbmfx.reindex(transformed.index)
+                aggregate_returns.loc[phase3_mask] = aligned_vbmfx.loc[phase3_mask]
+            except Exception as exc:
+                print(f"[!] VBMFX download failed: {exc}")
+                dampened_3 = transformed.loc[phase3_mask, 'bond_return'] * 0.75
+                aggregate_returns.loc[phase3_mask] = (
+                    0.8 * dampened_3 + 0.2 * rf_values.loc[phase3_mask]
+                )
+
+    transformed['bond_return'] = aggregate_returns
+
+    if 'bond_return_source' in transformed.columns:
+        transformed['bond_return_source'] = transformed['bond_return_source'].astype(str) + '_aggregate'
+    else:
+        transformed['bond_return_source'] = 'aggregate_bond'
+
+    annual_vol = transformed['bond_return'].std() * np.sqrt(12)
+    print(f"[+] Aggregate bond transformation complete: annual vol {annual_vol:.2%}, "
+          f"monthly std {transformed['bond_return'].std():.4f}")
+    return transformed
+
+
 def fetch_fama_french_factors(start_date: str, end_date: str) -> pd.DataFrame:
     """
     Queries Ken French's Data Library for MONTHLY research factors (Mkt-RF, SMB, HML, RF)
@@ -516,6 +594,20 @@ def transform_and_align_pipeline(asset_df: pd.DataFrame,
         }
         print(f"[+] Merged extended asset-class proxies (non-null months): {coverage}")
 
+    # 4c. Apply S&P 500 fallback for missing extended asset-class data
+    #     When international equity, real estate, or commodities data is missing
+    #     (pre-inception dates), use equity_return as proxy
+    extended_asset_cols = ['intl_equity_return', 'real_estate_return', 'commodities_return']
+    if 'equity_return' in master_matrix.columns:
+        for col in extended_asset_cols:
+            if col in master_matrix.columns:
+                missing_mask = master_matrix[col].isna()
+                n_filled = missing_mask.sum()
+                if n_filled > 0:
+                    master_matrix.loc[missing_mask, col] = master_matrix.loc[missing_mask, 'equity_return']
+                    print(f"[*] Filled {n_filled} missing {col} values with equity_return (S&P 500 proxy)")
+    
+
     # 5. Convert Period[M] index back to timestamps for downstream compatibility
     master_matrix.index = master_matrix.index.to_timestamp(how='end').normalize()
     master_matrix.index.name = 'date'
@@ -524,7 +616,7 @@ def transform_and_align_pipeline(asset_df: pd.DataFrame,
     return master_matrix
 
 
-def run_data_pipeline(fred_key: str, start: str = "1953-04-01", end: str = "2026-01-01") -> pd.DataFrame:
+def run_data_pipeline(fred_key: str, start: str = "1953-04-01", end: str = "2026-01-01", save: bool = True) -> pd.DataFrame:
     """
     Orchestration master function for execution inside notebooks or main application layers.
     """
@@ -541,6 +633,14 @@ def run_data_pipeline(fred_key: str, start: str = "1953-04-01", end: str = "2026
     aligned_dataset = transform_and_align_pipeline(
         equity_returns, ff_factors, fred_macro, bond_returns, extended_returns
     )
+    aligned_dataset = create_aggregate_bond_returns(aligned_dataset)
+
+    if save:
+        output_path = "data/processed/regime_labeled_dataset.csv"
+        os.makedirs(os.path.dirname(output_path), exist_ok=True)
+        aligned_dataset.to_csv(output_path)
+        print(f"[+] Saved aligned dataset to {output_path}")
+
     print(f"[+] Pipeline complete. Generated shape matrix: {aligned_dataset.shape}")
     return aligned_dataset
 
@@ -554,7 +654,7 @@ if __name__ == "__main__":
     try:
         sample_df = run_data_pipeline(fred_key=API_KEY, start="1953-04-01", end="2026-07-01")
 
-        output_path = "data/processed/aligned_macro_dataset.csv"
+        output_path = "data/processed/regime_labeled_dataset.csv"
         os.makedirs(os.path.dirname(output_path), exist_ok=True)
         sample_df.to_csv(output_path)
         print(f"[+] Success: Aligned dataset written to: {output_path}")
