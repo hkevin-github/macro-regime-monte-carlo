@@ -636,7 +636,7 @@ def run_data_pipeline(fred_key: str, start: str = "1953-04-01", end: str = "2026
     aligned_dataset = create_aggregate_bond_returns(aligned_dataset)
 
     if save:
-        output_path = "data/processed/regime_labeled_dataset.csv"
+        output_path = "data/processed/aligned_macro_dataset.csv"
         os.makedirs(os.path.dirname(output_path), exist_ok=True)
         aligned_dataset.to_csv(output_path)
         print(f"[+] Saved aligned dataset to {output_path}")
@@ -654,7 +654,7 @@ if __name__ == "__main__":
     try:
         sample_df = run_data_pipeline(fred_key=API_KEY, start="1953-04-01", end="2026-07-01")
 
-        output_path = "data/processed/regime_labeled_dataset.csv"
+        output_path = "data/processed/aligned_macro_dataset.csv"
         os.makedirs(os.path.dirname(output_path), exist_ok=True)
         sample_df.to_csv(output_path)
         print(f"[+] Success: Aligned dataset written to: {output_path}")
