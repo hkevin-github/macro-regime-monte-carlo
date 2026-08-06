@@ -3,8 +3,7 @@
 Regime-Aware Monte Carlo Portfolio Dashboard
 
 Features:
-- User enters holdings directly in a table
-- No CSV upload
+- User enters holdings directly in a table, OR loads them from a CSV path
 - Uses session state to persist holdings across reruns
 - Runs portfolio analyzer + regime-aware Monte Carlo simulation
 - Displays success probability, downside (20th %ile), median, upside (80th %ile)
@@ -63,7 +62,10 @@ def load_config(config_path: str = "config/info.json") -> dict:
 
 
 def format_currency(x: float) -> str:
-    return f"${x:,.0f}"
+    # Balances can now legitimately go negative (no zero-floor on failed trials),
+    # so put the minus sign before the $ instead of "$-15,000".
+    sign = '-' if x < 0 else ''
+    return f"{sign}${abs(x):,.0f}"
 
 
 def default_holdings_table() -> pd.DataFrame:
@@ -72,6 +74,40 @@ def default_holdings_table() -> pd.DataFrame:
             {"ticker": "BIAPX", "shares": 1000.0},
         ]
     )
+
+
+DEFAULT_PORTFOLIO_CSV_PATH = "/workspaces/macro-regime-monte-carlo/config/my_portfolio.csv"
+
+
+def load_holdings_from_csv(csv_path: str) -> tuple[pd.DataFrame | None, str | None]:
+    """
+    Load a ticker,shares holdings table from a CSV path.
+    Returns (dataframe, error_message). Exactly one of the two will be None.
+    """
+    path = Path(csv_path)
+    if not path.exists():
+        return None, f"File not found: {csv_path}"
+
+    try:
+        df = pd.read_csv(path)
+    except Exception as e:
+        return None, f"Failed to read CSV: {e}"
+
+    missing_cols = {"ticker", "shares"} - set(df.columns.str.lower())
+    if missing_cols:
+        return None, f"CSV must contain columns: ticker, shares (found: {list(df.columns)})"
+
+    # Normalize column names/casing without assuming exact case from the file
+    col_map = {c: c.lower() for c in df.columns}
+    df = df.rename(columns=col_map)[["ticker", "shares"]]
+    df["ticker"] = df["ticker"].astype(str).str.upper().str.strip()
+    df["shares"] = pd.to_numeric(df["shares"], errors="coerce")
+    df = df.dropna(subset=["shares"])
+
+    if df.empty:
+        return None, "CSV was read but contained no valid ticker/shares rows"
+
+    return df.reset_index(drop=True), None
 
 
 def dataframe_to_portfolio_dict(df: pd.DataFrame) -> dict:
@@ -165,7 +201,7 @@ def make_histogram(final_balances: np.ndarray):
             x=val,
             y=1,
             yref="paper",
-            text=f"{label}: ${val:,.0f}",
+            text=f"{label}: {format_currency(val)}",
             showarrow=False,
             textangle=90,
             font=dict(color=color),
@@ -252,7 +288,23 @@ with st.sidebar:
 
 # Main layout
 st.subheader("Portfolio Holdings")
-st.write("Enter your holdings directly below. Add or remove rows as needed.")
+st.write("Enter your holdings directly below, add/remove rows, or load them from a CSV file.")
+
+with st.expander("Load holdings from CSV", expanded=False):
+    csv_path_input = st.text_input(
+        "CSV path (must have columns: ticker, shares)",
+        value=DEFAULT_PORTFOLIO_CSV_PATH,
+    )
+    load_csv_button = st.button("Load CSV")
+
+    if load_csv_button:
+        loaded_df, load_error = load_holdings_from_csv(csv_path_input)
+        if load_error:
+            st.error(load_error)
+        else:
+            st.session_state.portfolio_df = loaded_df
+            st.success(f"Loaded {len(loaded_df)} holding(s) from {csv_path_input}")
+            st.rerun()
 
 edited_df = st.data_editor(
     st.session_state.portfolio_df,

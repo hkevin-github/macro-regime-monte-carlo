@@ -59,6 +59,13 @@ def load_config(config_path: str = "config/info.json") -> dict:
     return config
 
 
+def fmt_currency(x: float) -> str:
+    """Format a dollar amount, putting the minus sign before the $ for negatives
+    (e.g. -$15,000 instead of $-15,000) now that balances can go negative."""
+    sign = '-' if x < 0 else ''
+    return f"{sign}${abs(x):,.0f}"
+
+
 def plot_results(results: dict, summary: dict, output_path: str):
     all_balances = results["all_balances"]
     fig, axes = plt.subplots(2, 2, figsize=(15, 10))
@@ -78,7 +85,11 @@ def plot_results(results: dict, summary: dict, output_path: str):
     ax1.set_ylabel("Balance ($)")
     ax1.legend()
     ax1.grid(True, alpha=0.3)
-    ax1.yaxis.set_major_formatter(plt.FuncFormatter(lambda x, p: f'${x/1e6:.1f}M' if x >= 1e6 else f'${x/1e3:.0f}K'))
+    def _currency_fmt(x, p):
+        sign = '-' if x < 0 else ''
+        x = abs(x)
+        return f'{sign}${x/1e6:.1f}M' if x >= 1e6 else f'{sign}${x/1e3:.0f}K'
+    ax1.yaxis.set_major_formatter(plt.FuncFormatter(_currency_fmt))
 
     # Plot 2: Final balance distribution
     ax2 = axes[0, 1]
@@ -90,10 +101,10 @@ def plot_results(results: dict, summary: dict, output_path: str):
     p50_final = np.percentile(final_balances, 50)
     p80_final = np.percentile(final_balances, 80)
     
-    ax2.axvline(p20_final, color="orange", lw=2, ls="--", label=f"20th: ${p20_final:,.0f}")
-    ax2.axvline(p50_final, color="red", lw=2, label=f"Median: ${p50_final:,.0f}")
-    ax2.axvline(p80_final, color="purple", lw=2, ls="--", label=f"80th: ${p80_final:,.0f}")
-    ax2.axvline(summary["total_value"], color="green", ls=":", lw=1.5, label=f"Initial: ${summary['total_value']:,.0f}")
+    ax2.axvline(p20_final, color="orange", lw=2, ls="--", label=f"20th: {fmt_currency(p20_final)}")
+    ax2.axvline(p50_final, color="red", lw=2, label=f"Median: {fmt_currency(p50_final)}")
+    ax2.axvline(p80_final, color="purple", lw=2, ls="--", label=f"80th: {fmt_currency(p80_final)}")
+    ax2.axvline(summary["total_value"], color="green", ls=":", lw=1.5, label=f"Initial: {fmt_currency(summary['total_value'])}")
     
     ax2.set_title(f"Final Balance Distribution (Success: {results['success_rate']:.1%})")
     ax2.set_xlabel("Final Balance ($)")
@@ -253,11 +264,11 @@ def main():
     print(f"Outputs saved to: {output_dir}/")
     print(f"\nKey Results:")
     print(f"  Success rate: {results['success_rate']:.1%}")
-    print(f"  Median final balance: ${results['median_final']:,.0f}")
-    print(f"  20th percentile: ${p20_final:,.0f}")
-    print(f"  80th percentile: ${p80_final:,.0f}")
-    print(f"  10th percentile: ${results['p10_final']:,.0f}")
-    print(f"  90th percentile: ${results['p90_final']:,.0f}")
+    print(f"  Median final balance: {fmt_currency(results['median_final'])}")
+    print(f"  20th percentile: {fmt_currency(p20_final)}")
+    print(f"  80th percentile: {fmt_currency(p80_final)}")
+    print(f"  10th percentile: {fmt_currency(results['p10_final'])}")
+    print(f"  90th percentile: {fmt_currency(results['p90_final'])}")
 
 
 if __name__ == "__main__":

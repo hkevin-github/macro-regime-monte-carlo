@@ -19,17 +19,49 @@ class RegimeMultiAssetSimulator:
     and correlation modeling.
     """
     
-    # Map portfolio asset classes to regime statistics
+    # Map portfolio asset classes to regime statistics.
+    #
+    # International_Equity -> its own regime-conditioned distribution, built from
+    #   Ken French Developed ex-US factors (real data, ~1990+). See data_pipeline.py.
+    # Emerging_Markets_Equity -> folded into International_Equity. There is no free,
+    #   long-history, programmatically-fetchable EM total-return series, so rather
+    #   than fabricate one, EM exposure is treated as International_Equity risk.
+    # Real_Estate -> its own distribution, built from the Case-Shiller home price
+    #   index (price appreciation only, NOT REIT total return -- see caveats in
+    #   data_pipeline.py and hmm_regime_engine.py).
+    # Commodities -> its own distribution, built from PPIACO (a wholesale price
+    #   index used as a constructed proxy, NOT an investable commodities index).
+    # Any of the above falls back to 'equity' stats for a given regime if that
+    # regime doesn't have enough historical months for a reliable estimate
+    # (see get_asset_class_params / FALLBACK_ASSET_CLASS below).
     ASSET_CLASS_MAPPING = {
         'US_Equity': 'equity',
-        'International_Equity': 'equity',
-        'Emerging_Markets_Equity': 'equity',
+        'International_Equity': 'intl_equity',
+        'Emerging_Markets_Equity': 'intl_equity',
         'US_Bonds': 'bonds',
         'International_Bonds': 'bonds',
-        'Real_Estate': 'equity',
-        'Commodities': 'equity',
+        'Real_Estate': 'real_estate',
+        'Commodities': 'commodities',
         'Cash': 'cash',
         'Unknown': 'cash',
+    }
+
+    # Stats keys that require a reliability fallback (to 'equity') when a regime
+    # lacks sufficient historical observations for that asset class.
+    FALLBACK_ASSET_CLASS = {
+        'intl_equity': 'equity',
+        'real_estate': 'equity',
+        'commodities': 'equity',
+    }
+
+    # Maps a stats_key to the corresponding column name used in the regime
+    # correlation matrix's `correlation_features` list.
+    FEATURE_NAME_MAP = {
+        'equity': 'equity_return',
+        'bonds': 'bond_return',
+        'intl_equity': 'intl_equity_return',
+        'real_estate': 'real_estate_return',
+        'commodities': 'commodities_return',
     }
     
     def __init__(self, models_dir: str = "data/models"):
@@ -58,8 +90,16 @@ class RegimeMultiAssetSimulator:
             Dict with 'mean' and 'std' keys
         """
         stats_key = self.ASSET_CLASS_MAPPING.get(asset_class, 'cash')
+        return self._get_params_by_stats_key(stats_key, regime)
+
+    def _get_params_by_stats_key(self, stats_key: str, regime: int) -> Dict[str, float]:
+        """
+        Internal lookup by stats_key (rather than portfolio asset class), used both
+        by get_asset_class_params and by the fallback path for extended asset classes
+        that lack reliable regime-specific stats.
+        """
         regime_stats = self.regime_stats[regime]
-        
+
         if stats_key == 'equity':
             return {
                 'mean': regime_stats['equity_mean'],
@@ -86,6 +126,20 @@ class RegimeMultiAssetSimulator:
                 return {'mean': mean, 'std': std}
         elif stats_key == 'cash':
             return {'mean': 0.0, 'std': 0.0}
+        elif stats_key in ('intl_equity', 'real_estate', 'commodities'):
+            mean_key = f"{stats_key}_mean"
+            std_key = f"{stats_key}_std"
+            reliable_key = f"{stats_key}_is_reliable"
+
+            if regime_stats.get(reliable_key) and regime_stats.get(mean_key) is not None:
+                return {'mean': regime_stats[mean_key], 'std': regime_stats[std_key]}
+
+            # This regime doesn't have enough historical months of this asset class's
+            # proxy series to trust a regime-specific estimate (common for regimes
+            # occurring before the proxy's inception -- e.g. pre-1990 for
+            # international, pre-1987 for real estate). Fall back to equity.
+            fallback_key = self.FALLBACK_ASSET_CLASS.get(stats_key, 'equity')
+            return self._get_params_by_stats_key(fallback_key, regime)
         else:
             return {'mean': 0.0, 'std': 0.0}
     
@@ -157,6 +211,12 @@ class RegimeMultiAssetSimulator:
                 inflation_monthly = (1.0 + inflation_yoy) ** (1.0 / 12.0) - 1.0
                 means.append(inflation_monthly)
                 stds.append(regime_stats.get('inflation_std', 0.01) / np.sqrt(12))
+            elif feature in ('intl_equity_return', 'real_estate_return', 'commodities_return'):
+                stats_key = feature.replace('_return', '')
+                # Guaranteed present and reliable here, since compute_regime_correlation_matrix
+                # only includes a column if it met MIN_EXTENDED_OBSERVATIONS within this regime.
+                means.append(regime_stats.get(f'{stats_key}_mean', regime_stats['equity_mean']))
+                stds.append(regime_stats.get(f'{stats_key}_std', regime_stats['equity_std']))
         
         mean_vector = np.array(means)
         std_vector = np.array(stds)
@@ -174,23 +234,22 @@ class RegimeMultiAssetSimulator:
             for asset_class, weight in asset_class_weights.items():
                 stats_key = self.ASSET_CLASS_MAPPING.get(asset_class, 'cash')
 
-                if stats_key == 'equity':
-                    if 'equity_return' in features:
-                        idx = features.index('equity_return')
-                        period_return += weight * samples[idx]
-                    else:
-                        params = self.get_asset_class_params(asset_class, regime)
-                        period_return += weight * rng.normal(params['mean'], params['std'])
-                elif stats_key == 'bonds':
-                    if 'bond_return' in features:
-                        idx = features.index('bond_return')
-                        period_return += weight * samples[idx]
-                    else:
-                        params = self.get_asset_class_params(asset_class, regime)
-                        period_return += weight * rng.normal(params['mean'], params['std'])
-                elif stats_key == 'cash':
+                if stats_key == 'cash':
                     period_return += weight * 0.0
+                    continue
+
+                feature_name = self.FEATURE_NAME_MAP.get(stats_key)
+
+                if feature_name is not None and feature_name in features:
+                    # This asset class's return is part of the correlated draw --
+                    # use it directly so cross-asset correlation is preserved.
+                    idx = features.index(feature_name)
+                    period_return += weight * samples[idx]
                 else:
+                    # Feature wasn't part of this regime's correlation matrix (either
+                    # unsupported stats_key, or this asset class lacked enough
+                    # observations in this regime). Sample independently, applying
+                    # the equity-fallback logic in get_asset_class_params.
                     params = self.get_asset_class_params(asset_class, regime)
                     period_return += weight * rng.normal(params['mean'], params['std'])
 
@@ -300,6 +359,8 @@ class RegimeMultiAssetSimulator:
             balance = initial_balance
             all_balances[trial, 0] = balance
             
+            trial_failed = False
+
             for month in range(n_months):
                 if month < contribution_months:
                     balance += monthly_contribution
@@ -307,17 +368,20 @@ class RegimeMultiAssetSimulator:
                 balance -= monthly_withdrawal
                 balance *= (1 + returns[month])
                 balance *= (1.0 - monthly_fee_rate)
-                
-                if balance < failure_threshold:
+
+                # "Failure" is tracked as a flag once the balance first dips below
+                # the threshold, but the balance itself is NOT floored at zero --
+                # withdrawals and returns keep compounding through negative
+                # territory (mirrors eMoney's convention) so percentile bands show
+                # depth of shortfall rather than clamping everyone to $0.
+                if balance < failure_threshold and not trial_failed:
+                    trial_failed = True
                     all_success[trial] = False
-                    balance = 0.0
-                    all_balances[trial, month + 1:] = 0.0
-                    break
-                
+
                 all_balances[trial, month + 1] = balance
             
             final_balances[trial] = balance
-            if balance <= 0 or balance < target_end_balance:
+            if trial_failed or balance < target_end_balance:
                 all_success[trial] = False
         
         # Compute statistics

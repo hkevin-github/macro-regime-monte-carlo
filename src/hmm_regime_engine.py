@@ -21,6 +21,25 @@ FEATURE_COLS = [
     'credit_spread_delta_zscore',
 ]
 
+# Extended asset-class return proxies, mapped from their column name in the aligned
+# dataset to the short "stats key" used throughout regime_stats / the simulator.
+# See data_pipeline.py for what each proxy actually measures and its real caveats
+# (international = Ken French Developed ex-US, real estate = Case-Shiller HPI price
+# appreciation only, commodities = PPIACO wholesale price index -- neither real estate
+# nor commodities is an investable total-return series).
+EXTENDED_ASSET_COLS = {
+    'intl_equity_return': 'intl_equity',
+    'real_estate_return': 'real_estate',
+    'commodities_return': 'commodities',
+}
+
+# Minimum number of non-null months required WITHIN a given regime before we trust
+# that asset class's regime-specific mean/std. Below this, the simulator falls back
+# to US equity stats for that regime/asset-class combination rather than reporting an
+# unreliable estimate. This will legitimately happen for older regimes (pre-1990s),
+# since these proxies have shorter histories than the core 1953+ macro dataset.
+MIN_EXTENDED_OBSERVATIONS = 24
+
 
 def load_processed_data(file_path: str) -> pd.DataFrame:
     if not os.path.exists(file_path):
@@ -250,44 +269,71 @@ def compute_regime_correlation_matrix(regime_data: pd.DataFrame,
                                      min_observations: int = 30) -> dict:
     """
     Compute correlation matrix for returns within a regime.
-    Includes equity, bonds (if available), and inflation.
+    Includes equity, bonds, extended asset-class proxies (international, real estate,
+    commodities), and inflation -- whichever are present with sufficient coverage.
     Applies shrinkage for numerical stability.
+
+    Extended asset-class columns typically have shorter histories than equity/bonds,
+    so we only include a column if it has at least `min_observations` non-null values
+    WITHIN this regime's data. Columns without enough coverage are silently dropped
+    from the correlation matrix (their asset classes fall back to equity stats at
+    simulation time -- see regime_portfolio_simulator.py).
     """
-    # Select return columns
-    return_cols = []
-    if 'equity_return' in regime_data.columns:
-        return_cols.append('equity_return')
-    if 'bond_return' in regime_data.columns:
-        return_cols.append('bond_return')
-    if 'cpi_yoy' in regime_data.columns:
-        return_cols.append('cpi_yoy')
-    
+    # Select candidate return columns, in priority order
+    candidate_cols = ['equity_return', 'bond_return']
+    for col in EXTENDED_ASSET_COLS.keys():
+        candidate_cols.append(col)
+    candidate_cols.append('cpi_yoy')
+
+    return_cols = [c for c in candidate_cols if c in regime_data.columns]
+
     if len(return_cols) < 2 or len(regime_data) < min_observations:
         return None
-    
-    # Compute correlation matrix
-    corr_matrix = regime_data[return_cols].corr()
-    
-    # Check for NaN or invalid values
-    if corr_matrix.isnull().any().any():
+
+    # Keep only columns with enough non-null observations WITHIN this regime
+    usable_cols = [
+        c for c in return_cols
+        if regime_data[c].notna().sum() >= min_observations
+    ]
+
+    if len(usable_cols) < 2:
         return None
-    
+
+    # Compute correlation matrix using only rows where ALL usable columns overlap.
+    # This naturally restricts the correlation estimate to the shared history window
+    # (e.g. post-1990 if international equity is included).
+    corr_matrix = regime_data[usable_cols].corr()
+
+    # If any pairwise correlation is still NaN (e.g. zero overlap between two
+    # short-history columns), drop the least-covered offending column and retry once.
+    if corr_matrix.isnull().any().any():
+        coverage = {c: regime_data[c].notna().sum() for c in usable_cols}
+        problem_cols = corr_matrix.columns[corr_matrix.isnull().any()].tolist()
+        if problem_cols:
+            drop_col = min(problem_cols, key=lambda c: coverage.get(c, 0))
+            usable_cols = [c for c in usable_cols if c != drop_col]
+            if len(usable_cols) < 2:
+                return None
+            corr_matrix = regime_data[usable_cols].corr()
+        if corr_matrix.isnull().any().any():
+            return None
+
     # Validate positive definiteness
     eigenvalues = np.linalg.eigvals(corr_matrix.values)
-    
+
     if np.any(eigenvalues <= 1e-8):
         print(f"    [!] Correlation matrix not positive definite. Applying shrinkage.")
         # Ledoit-Wolf shrinkage towards identity
         n_features = len(corr_matrix)
         identity = np.eye(n_features)
         shrinkage = 0.2
-        
+
         corr_array = (1 - shrinkage) * corr_matrix.values + shrinkage * identity
         corr_matrix = pd.DataFrame(corr_array, index=corr_matrix.index, columns=corr_matrix.columns)
-    
+
     return {
         'matrix': corr_matrix.values.tolist(),
-        'features': return_cols
+        'features': usable_cols
     }
 
 
@@ -390,7 +436,43 @@ def save_model_artifacts(model: GaussianHMM, labeled_df: pd.DataFrame, regime_na
         
         # Compute correlation matrix
         correlation_data = compute_regime_correlation_matrix(regime_data)
-        
+
+        # Extended asset-class statistics: international equity, real estate,
+        # commodities. Computed only from months where the proxy actually has data
+        # WITHIN this regime; flagged unreliable (and left for equity fallback) if
+        # there isn't enough history for this regime/asset-class combination.
+        extended_stats = {}
+        for col, key in EXTENDED_ASSET_COLS.items():
+            if col not in regime_data.columns:
+                extended_stats[key] = {'mean': None, 'std': None, 'n_obs': 0, 'is_reliable': False}
+                continue
+
+            col_data = regime_data[col].dropna()
+            n_col_obs = len(col_data)
+
+            if n_col_obs < MIN_EXTENDED_OBSERVATIONS:
+                extended_stats[key] = {
+                    'mean': None, 'std': None, 'n_obs': int(n_col_obs), 'is_reliable': False
+                }
+                continue
+
+            asset_mean = float(col_data.mean())
+            asset_std = float(col_data.std())
+
+            global_col_data = labeled_df[col].dropna() if col in labeled_df.columns else pd.Series(dtype=float)
+            global_std = float(global_col_data.std()) if len(global_col_data) > 1 else asset_std
+
+            if not np.isfinite(asset_std) or asset_std < 1e-8:
+                print(f"⚠️  WARNING: Regime {regime} has invalid {key} std: {asset_std}")
+                print(f"    Using global std dev as fallback")
+                asset_std = global_std if np.isfinite(global_std) and global_std > 1e-8 else 0.03
+            elif n_col_obs < 40 and asset_std < 0.01:
+                asset_std = 0.7 * asset_std + 0.3 * global_std
+
+            extended_stats[key] = {
+                'mean': asset_mean, 'std': asset_std, 'n_obs': int(n_col_obs), 'is_reliable': True
+            }
+
         regime_stats[int(regime)] = {
             "label": regime_name_map[int(regime)],
             "count": int(n_obs),
@@ -421,6 +503,19 @@ def save_model_artifacts(model: GaussianHMM, labeled_df: pd.DataFrame, regime_na
                 for col in FEATURE_COLS if col in regime_data
             }
         }
+
+        # Attach extended asset-class stats (intl_equity_mean/std, real_estate_mean/std,
+        # commodities_mean/std, plus n_obs and is_reliable flags for each).
+        for key, s in extended_stats.items():
+            regime_stats[int(regime)][f"{key}_mean"] = s['mean']
+            regime_stats[int(regime)][f"{key}_std"] = s['std']
+            regime_stats[int(regime)][f"{key}_n_obs"] = s['n_obs']
+            regime_stats[int(regime)][f"{key}_is_reliable"] = s['is_reliable']
+
+            if not s['is_reliable']:
+                print(f"ℹ️  Regime {regime} ({regime_label}): {key} has only {s['n_obs']} "
+                      f"observations (< {MIN_EXTENDED_OBSERVATIONS}) -- will fall back to "
+                      f"US equity stats for this regime at simulation time.")
 
     stats_path = "data/models/regime_market_assumptions.json"
     with open(stats_path, "w") as f:

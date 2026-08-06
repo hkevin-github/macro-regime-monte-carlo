@@ -146,6 +146,133 @@ def fetch_fama_french_factors(start_date: str, end_date: str) -> pd.DataFrame:
     return df
 
 
+def fetch_international_equity_returns(start_date: str, end_date: str) -> pd.DataFrame:
+    """
+    Fetches MONTHLY international developed-market equity returns from Ken French's
+    Developed ex-US 3-Factor library. This is real, free, programmatically-available
+    total-return data (unlike an international ETF, which only has ~15-20 years of
+    history). Coverage starts around 1990 rather than 1953 -- still short of the full
+    macro window, but a genuine measured series rather than a fabricated one.
+    """
+    print(f"[*] Ingesting Ken French Developed ex-US Equity Factors (international proxy)...")
+    try:
+        ff_intl = web.DataReader(
+            'Developed_ex_US_3_Factors', 'famafrench', start=start_date, end=end_date
+        )
+        df = ff_intl[0] / 100.0
+
+        if isinstance(df.index, pd.PeriodIndex):
+            df.index = df.index.asfreq('M')
+        else:
+            df.index = pd.to_datetime(df.index).to_period('M')
+
+        # Total developed ex-US market return = Mkt-RF + RF
+        intl_returns = (df['Mkt-RF'] + df['RF']).to_frame(name='intl_equity_return')
+        print(f"[+] Fetched intl equity proxy: {len(intl_returns)} months, "
+              f"starts {intl_returns.index.min()}")
+        return intl_returns
+    except Exception as e:
+        print(f"[!] International equity fetch failed: {e}")
+        print(f"[!] International equity regime stats will fall back to US equity.")
+        return pd.DataFrame()
+
+
+def fetch_real_estate_proxy(api_key: str, start_date: str, end_date: str) -> pd.DataFrame:
+    """
+    Fetches the Case-Shiller U.S. National Home Price Index (FRED: CSUSHPINSA) as a
+    real-estate return proxy, monthly, back to 1987.
+
+    IMPORTANT: This is a HOME-PRICE APPRECIATION series, not a REIT total-return index.
+    It excludes dividend yield, leverage, and public-market volatility that a REIT ETF
+    would exhibit. It is used here because it is real, free, and long-history -- but
+    should be understood as a conservative, lower-volatility proxy for "real estate"
+    exposure, not an equivalent substitute for listed REIT returns.
+    """
+    print(f"[*] Ingesting Case-Shiller Home Price Index (real estate proxy, CSUSHPINSA)...")
+    normalized_key = normalize_api_key(api_key)
+    try:
+        fred = Fred(api_key=normalized_key)
+        series = fred.get_series('CSUSHPINSA', observation_start=start_date, observation_end=end_date)
+        series.index = pd.to_datetime(series.index)
+        monthly = series.resample('ME').last()
+        returns = monthly.pct_change().dropna()
+        returns.index = returns.index.to_period('M')
+        returns.name = 'real_estate_return'
+        print(f"[+] Fetched real estate proxy: {len(returns)} months, starts {returns.index.min()}")
+        return returns.to_frame()
+    except Exception as e:
+        print(f"[!] Real estate proxy fetch failed: {e}")
+        print(f"[!] Real estate regime stats will fall back to US equity.")
+        return pd.DataFrame()
+
+
+def fetch_commodities_proxy(api_key: str, start_date: str, end_date: str) -> pd.DataFrame:
+    """
+    Fetches the Producer Price Index: All Commodities (FRED: PPIACO) as a commodities
+    return proxy, monthly, back to 1913.
+
+    IMPORTANT: PPIACO is a wholesale PRICE index, not an investable commodities total-
+    return index (like the S&P GSCI). It has no roll yield, collateral yield, or futures
+    curve effects. It is used here as a real, free, long-history proxy for commodity
+    price cycles -- flagged explicitly as a constructed proxy rather than a measured
+    investable return.
+    """
+    print(f"[*] Ingesting Producer Price Index: All Commodities (commodities proxy, PPIACO)...")
+    normalized_key = normalize_api_key(api_key)
+    try:
+        fred = Fred(api_key=normalized_key)
+        series = fred.get_series('PPIACO', observation_start=start_date, observation_end=end_date)
+        series.index = pd.to_datetime(series.index)
+        monthly = series.resample('ME').last()
+        returns = monthly.pct_change().dropna()
+        returns.index = returns.index.to_period('M')
+        returns.name = 'commodities_return'
+        print(f"[+] Fetched commodities proxy: {len(returns)} months, starts {returns.index.min()}")
+        return returns.to_frame()
+    except Exception as e:
+        print(f"[!] Commodities proxy fetch failed: {e}")
+        print(f"[!] Commodities regime stats will fall back to US equity.")
+        return pd.DataFrame()
+
+
+def fetch_extended_asset_returns(api_key: str, start_date: str, end_date: str) -> pd.DataFrame:
+    """
+    Fetches all extended asset-class return proxies (international equity, real estate,
+    commodities) and merges them into a single DataFrame keyed on Period[M].
+
+    These series have shorter histories than the core 1953+ macro dataset, so this
+    DataFrame will contain leading NaNs per column until that series' inception date.
+    This is expected: regime statistics for each asset class are computed later using
+    only the months where that specific asset class has real data (see
+    hmm_regime_engine.py), and older regimes with no coverage will fall back to
+    US equity stats at simulation time rather than being filled here.
+
+    NOTE: Emerging markets equity is intentionally NOT included as a separate series.
+    There is no free, long-history, programmatically-fetchable EM total-return series
+    available, so EM exposure is folded into the International_Equity bucket in the
+    simulator rather than being given a fabricated distribution.
+    """
+    frames = []
+
+    intl = fetch_international_equity_returns(start_date, end_date)
+    if not intl.empty:
+        frames.append(intl)
+
+    real_estate = fetch_real_estate_proxy(api_key, start_date, end_date)
+    if not real_estate.empty:
+        frames.append(real_estate)
+
+    commodities = fetch_commodities_proxy(api_key, start_date, end_date)
+    if not commodities.empty:
+        frames.append(commodities)
+
+    if not frames:
+        return pd.DataFrame()
+
+    extended_df = pd.concat(frames, axis=1)
+    return extended_df
+
+
 def fetch_fred_macro(api_key: str, start_date: str, end_date: str) -> pd.DataFrame:
     """
     Queries FRED API for the core monthly macro indicators:
@@ -197,7 +324,8 @@ def fetch_fred_macro(api_key: str, start_date: str, end_date: str) -> pd.DataFra
 def transform_and_align_pipeline(asset_df: pd.DataFrame, 
                                  ff_df: pd.DataFrame, 
                                  macro_df: pd.DataFrame,
-                                 bond_df: pd.DataFrame = None) -> pd.DataFrame:
+                                 bond_df: pd.DataFrame = None,
+                                 extended_df: pd.DataFrame = None) -> pd.DataFrame:
     """
     Transforms raw macro factors for stationarity using smoothed rolling windows
     and CAUSAL expanding-window z-score standardization to eliminate look-ahead bias.
@@ -207,6 +335,11 @@ def transform_and_align_pipeline(asset_df: pd.DataFrame,
         ff_df: Fama-French factors
         macro_df: Macro indicators
         bond_df: Bond returns (optional)
+        extended_df: Extended asset-class return proxies -- international equity,
+            real estate, commodities (optional). Merged via LEFT JOIN after the core
+            dropna() step so that these shorter-history columns do NOT truncate the
+            core 1953+ training window used for HMM fitting. Expect NaNs in these
+            columns before each series' inception date.
     
     Returns:
         Aligned dataset with causal z-scores
@@ -250,7 +383,18 @@ def transform_and_align_pipeline(asset_df: pd.DataFrame,
     # Drop rows where z-scores couldn't be computed
     master_matrix = master_matrix.dropna(subset=[f'{c}_zscore' for c in macro_cols])
 
-    # 4. Convert Period[M] index back to timestamps for downstream compatibility
+    # 4. Left-join extended asset-class return proxies (international, real estate,
+    #    commodities). These have shorter histories than the core matrix, so this
+    #    intentionally introduces NaNs for the pre-inception months of each series
+    #    rather than dropping rows -- the core 1953+ training window is preserved.
+    if extended_df is not None and not extended_df.empty:
+        master_matrix = master_matrix.join(extended_df, how='left')
+        coverage = {
+            col: master_matrix[col].notna().sum() for col in extended_df.columns
+        }
+        print(f"[+] Merged extended asset-class proxies (non-null months): {coverage}")
+
+    # 5. Convert Period[M] index back to timestamps for downstream compatibility
     master_matrix.index = master_matrix.index.to_timestamp(how='end').normalize()
     master_matrix.index.name = 'date'
 
@@ -266,8 +410,11 @@ def run_data_pipeline(fred_key: str, start: str = "1953-04-01", end: str = "2026
     ff_factors = fetch_fama_french_factors(start, end)
     fred_macro = fetch_fred_macro(fred_key, start, end)
     bond_returns = fetch_bond_returns(start, end)
+    extended_returns = fetch_extended_asset_returns(fred_key, start, end)
 
-    aligned_dataset = transform_and_align_pipeline(equity_returns, ff_factors, fred_macro, bond_returns)
+    aligned_dataset = transform_and_align_pipeline(
+        equity_returns, ff_factors, fred_macro, bond_returns, extended_returns
+    )
     print(f"[+] Pipeline complete. Generated shape matrix: {aligned_dataset.shape}")
     return aligned_dataset
 
@@ -292,5 +439,12 @@ if __name__ == "__main__":
         if 'bond_return' in sample_df.columns:
             cols_to_show.insert(2, 'bond_return')
         print(sample_df[cols_to_show].head())
+
+        print("\n--- EXTENDED ASSET-CLASS PROXY COVERAGE ---")
+        for col in ['intl_equity_return', 'real_estate_return', 'commodities_return']:
+            if col in sample_df.columns:
+                n_obs = sample_df[col].notna().sum()
+                first_valid = sample_df[col].first_valid_index()
+                print(f"  {col}: {n_obs} months available, starting {first_valid}")
     except Exception as e:
         print(f"[-] Execution Pipeline Failure: {str(e)}")

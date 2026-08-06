@@ -207,6 +207,18 @@ class TickerClassifier:
         "AGG": {"US_Bonds": 1.0},
         "SCHZ": {"US_Bonds": 1.0},
         "GOVT": {"US_Bonds": 1.0},
+        "VNQ": {"Real_Estate": 1.0},
+        "IYR": {"Real_Estate": 1.0},
+        "SCHH": {"Real_Estate": 1.0},
+        # Futures-based commodity ETFs: `asset_classes` look-through reports these
+        # as mostly Cash (collateral backing the futures), which is technically
+        # true but economically misleading -- their actual market exposure is
+        # commodities. Hard-hinted here rather than relying on the cash-sanity-check
+        # fallback, since these are well-known and unambiguous.
+        "PDBC": {"Commodities": 1.0},
+        "DBC": {"Commodities": 1.0},
+        "GSG": {"Commodities": 1.0},
+        "USO": {"Commodities": 1.0},
     }
 
     def __init__(self, manual_overrides_path: str = "config/manual_fund_overrides.json"):
@@ -490,13 +502,16 @@ class TickerClassifier:
 
             score = 0.0
 
-            if "asset_classes" in src_lower or "assetclass" in src_lower:
+            is_asset_classes_src = "asset_classes" in src_lower or "assetclass" in src_lower
+            is_sector_src = "sector_weightings" in src_lower
+
+            if is_asset_classes_src:
                 score += 100.0
 
             if "top_holdings" in src_lower or "holdings" in src_lower:
                 score += 40.0
 
-            if "sector_weightings" in src_lower:
+            if is_sector_src:
                 score += 5.0
 
             if "US_Bonds" in broad:
@@ -507,6 +522,24 @@ class TickerClassifier:
 
             if broad.get("US_Equity", 0.0) > 0.9:
                 score -= 5.0
+
+            # An `asset_classes` payload (stock/bond/cash split) only tells us how
+            # much of the fund is equity-like -- it says nothing about WHAT that
+            # equity actually is. For single-sector funds (REITs, sector ETFs,
+            # commodity-equity funds) this payload looks like "98% US_Equity" even
+            # though the underlying holdings are 99% real estate. If a sector-level
+            # payload for this SAME ticker clearly identifies a concentrated
+            # non-equity sector (real estate, commodities), that's strictly more
+            # informative and should win regardless of the generic source-name bonus.
+            if is_asset_classes_src:
+                dominant_asset_class = max(broad, key=broad.get) if broad else None
+                if dominant_asset_class == "US_Equity" and broad.get("US_Equity", 0.0) > 0.85:
+                    score -= 90.0
+
+            if is_sector_src:
+                dominant_sector_class = max(broad, key=broad.get) if broad else None
+                if dominant_sector_class in ("Real_Estate", "Commodities") and broad.get(dominant_sector_class, 0.0) > 0.5:
+                    score += 90.0
 
             return score
 
@@ -646,6 +679,20 @@ class TickerClassifier:
             if fund_holdings:
                 fund_broad = self._normalize_and_rollup_exposure(fund_holdings)
                 if fund_broad and next(iter(fund_broad.keys())) != "Unknown":
+                    # Sanity check: a look-through payload dominated by Cash is
+                    # sometimes technically accurate but economically misleading --
+                    # e.g. futures-based commodity ETFs (PDBC, DBC, USO) hold most
+                    # assets as cash/Treasury collateral backing derivatives, so
+                    # `asset_classes` legitimately reports ~85%+ cash even though the
+                    # fund's actual market exposure is commodities. If the category
+                    # metadata clearly identifies a different, non-cash asset class,
+                    # prefer that over a cash-dominated look-through result.
+                    if fund_broad.get("Cash", 0.0) > 0.70:
+                        category_result = self.classify_metadata(metadata)
+                        category_broad = self._normalize_and_rollup_exposure(category_result)
+                        category_label = next(iter(category_broad.keys())) if category_broad else "Unknown"
+                        if category_label not in ("Unknown", "Cash"):
+                            return category_broad
                     return fund_broad
 
             # Metadata classification
