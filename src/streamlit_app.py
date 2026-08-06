@@ -8,6 +8,7 @@ Features:
 - Runs portfolio analyzer + regime-aware Monte Carlo simulation
 - Displays success probability, downside (20th %ile), median, upside (80th %ile)
 - Shows allocation pie chart, fan chart, and final balance histogram
+- NOW: Side-by-side comparison with bootstrap historical sampling
 """
 
 from __future__ import annotations
@@ -23,6 +24,7 @@ import plotly.graph_objects as go
 
 from portfolio_analyzer import PortfolioAnalyzer
 from regime_portfolio_simulator import RegimeMultiAssetSimulator
+from bootstrap_simulator import BootstrapMonteCarloSimulator
 
 
 # -----------------------------------------------------------------------------
@@ -62,8 +64,6 @@ def load_config(config_path: str = "config/info.json") -> dict:
 
 
 def format_currency(x: float) -> str:
-    # Balances can now legitimately go negative (no zero-floor on failed trials),
-    # so put the minus sign before the $ instead of "$-15,000".
     sign = '-' if x < 0 else ''
     return f"{sign}${abs(x):,.0f}"
 
@@ -97,7 +97,6 @@ def load_holdings_from_csv(csv_path: str) -> tuple[pd.DataFrame | None, str | No
     if missing_cols:
         return None, f"CSV must contain columns: ticker, shares (found: {list(df.columns)})"
 
-    # Normalize column names/casing without assuming exact case from the file
     col_map = {c: c.lower() for c in df.columns}
     df = df.rename(columns=col_map)[["ticker", "shares"]]
     df["ticker"] = df["ticker"].astype(str).str.upper().str.strip()
@@ -134,7 +133,7 @@ def dataframe_to_portfolio_dict(df: pd.DataFrame) -> dict:
     return portfolio
 
 
-def make_fan_chart(all_balances: np.ndarray):
+def make_fan_chart(all_balances: np.ndarray, title: str = "Projected Portfolio Balance"):
     years = np.arange(all_balances.shape[1]) / 12.0
 
     p20 = np.percentile(all_balances, 20, axis=0)
@@ -166,16 +165,16 @@ def make_fan_chart(all_balances: np.ndarray):
     )
 
     fig.update_layout(
-        title="Projected Portfolio Balance",
+        title=title,
         xaxis_title="Years",
         yaxis_title="Balance",
         template="plotly_white",
-        height=500,
+        height=400,
     )
     return fig
 
 
-def make_histogram(final_balances: np.ndarray):
+def make_histogram(final_balances: np.ndarray, title: str = "Final Balance Distribution"):
     p20 = np.percentile(final_balances, 20)
     p50 = np.percentile(final_balances, 50)
     p80 = np.percentile(final_balances, 80)
@@ -208,11 +207,11 @@ def make_histogram(final_balances: np.ndarray):
         )
 
     fig.update_layout(
-        title="Final Balance Distribution",
+        title=title,
         xaxis_title="Final Balance",
         yaxis_title="Count",
         template="plotly_white",
-        height=400,
+        height=300,
     )
     return fig
 
@@ -223,8 +222,11 @@ def make_histogram(final_balances: np.ndarray):
 if "portfolio_df" not in st.session_state:
     st.session_state.portfolio_df = default_holdings_table()
 
-if "results" not in st.session_state:
-    st.session_state.results = None
+if "regime_results" not in st.session_state:
+    st.session_state.regime_results = None
+
+if "bootstrap_results" not in st.session_state:
+    st.session_state.bootstrap_results = None
 
 if "summary" not in st.session_state:
     st.session_state.summary = None
@@ -234,7 +236,7 @@ if "summary" not in st.session_state:
 # UI
 # -----------------------------------------------------------------------------
 st.title("Regime-Aware Monte Carlo Portfolio Dashboard")
-st.caption("Enter holdings, choose assumptions, and simulate portfolio outcomes.")
+st.caption("Compare regime-aware simulation vs. bootstrap historical sampling")
 
 config = load_config()
 
@@ -284,7 +286,7 @@ with st.sidebar:
         step=1,
     )
 
-    run_button = st.button("Run Simulation", type="primary")
+    run_button = st.button("Run Both Simulations", type="primary")
 
 # Main layout
 st.subheader("Portfolio Holdings")
@@ -317,7 +319,6 @@ edited_df = st.data_editor(
     },
 )
 
-# Save edited table into session state immediately so it persists
 st.session_state.portfolio_df = edited_df
 
 portfolio_dict = dataframe_to_portfolio_dict(edited_df)
@@ -335,16 +336,19 @@ if run_button:
     if len(portfolio_dict) == 0:
         st.error("Please enter at least one valid holding before running the simulation.")
     else:
-        with st.spinner("Fetching prices, classifying holdings, and running Monte Carlo..."):
+        with st.spinner("Running regime-aware and bootstrap simulations..."):
             try:
+                # Load historical data
+                historical_data = pd.read_csv("data/processed/regime_labeled_dataset.csv")
+                
                 # 1) Portfolio analysis
                 analyzer = PortfolioAnalyzer()
                 summary = analyzer.analyze(portfolio_dict)
                 st.session_state.summary = summary
 
-                # 2) Monte Carlo simulation
-                simulator = RegimeMultiAssetSimulator()
-                results = simulator.run_simulation(
+                # 2) Regime-aware simulation
+                regime_simulator = RegimeMultiAssetSimulator()
+                regime_results = regime_simulator.run_simulation(
                     asset_class_weights=summary["asset_class_weights"],
                     initial_balance=summary["total_value"],
                     n_trials=int(n_trials),
@@ -357,22 +361,26 @@ if run_button:
                     target_end_balance=target_end_balance,
                     random_state=int(random_seed),
                 )
-                st.session_state.results = results
+                st.session_state.regime_results = regime_results
 
-                # 3) Metrics
-                final_balances = results["final_balances"]
-                p20 = float(np.percentile(final_balances, 20))
-                p50 = float(np.percentile(final_balances, 50))
-                p80 = float(np.percentile(final_balances, 80))
-                success_rate = float(results["success_rate"])
+                # 3) Bootstrap simulation
+                bootstrap_simulator = BootstrapMonteCarloSimulator(historical_data)
+                bootstrap_results = bootstrap_simulator.run_simulation(
+                    asset_class_weights=summary["asset_class_weights"],
+                    initial_balance=summary["total_value"],
+                    n_trials=int(n_trials),
+                    n_years=int(n_years),
+                    annual_contribution=float(annual_contribution),
+                    annual_withdrawal=float(annual_withdrawal),
+                    annual_fee=annual_fee,
+                    contribution_years=contribution_years,
+                    failure_threshold=failure_threshold,
+                    target_end_balance=target_end_balance,
+                    random_state=int(random_seed),
+                )
+                st.session_state.bootstrap_results = bootstrap_results
 
-                st.success("Simulation complete")
-
-                col1, col2, col3, col4 = st.columns(4)
-                col1.metric("Probability of Success", f"{success_rate:.1%}")
-                col2.metric("Downside (20th %ile)", format_currency(p20))
-                col3.metric("Median", format_currency(p50))
-                col4.metric("Upside (80th %ile)", format_currency(p80))
+                st.success("Both simulations complete")
 
                 # 4) Portfolio summary
                 st.subheader("Portfolio Summary")
@@ -396,77 +404,116 @@ if run_button:
                     )
                     st.plotly_chart(fig_alloc, use_container_width=True)
 
-                # 5) Balance fan chart
-                st.subheader("Projected Balance Fan Chart")
-                st.plotly_chart(make_fan_chart(results["all_balances"]), use_container_width=True)
-
-                # 6) Final balance histogram
-                st.subheader("Final Balance Distribution")
-                st.plotly_chart(make_histogram(final_balances), use_container_width=True)
-
-                # 7) Optional detailed stats
-                with st.expander("Simulation Statistics", expanded=False):
-                    stats_cols = st.columns(4)
-                    stats_cols[0].metric("Mean Final Balance", format_currency(results["mean_final"]))
-                    stats_cols[1].metric("10th %ile", format_currency(results["p10_final"]))
-                    stats_cols[2].metric("25th %ile", format_currency(results["p25_final"]))
-                    stats_cols[3].metric("75th %ile", format_currency(results["p75_final"]))
-
-                    st.write("### Full Results Snapshot")
-                    st.json(
-                        {
-                            "success_rate": results["success_rate"],
-                            "median_final": results["median_final"],
-                            "mean_final": results["mean_final"],
-                            "p10_final": results["p10_final"],
-                            "p20_final": p20,
-                            "p50_final": p50,
-                            "p80_final": p80,
-                            "p90_final": results["p90_final"],
-                            "min_final": results["min_final"],
-                            "max_final": results["max_final"],
-                        }
+                # 5) Side-by-side comparison
+                st.subheader("📊 Simulation Comparison")
+                
+                comp_col1, comp_col2 = st.columns(2)
+                
+                with comp_col1:
+                    st.markdown("### 🎯 Regime-Aware")
+                    regime_final = regime_results["final_balances"]
+                    regime_p20 = float(np.percentile(regime_final, 20))
+                    regime_p50 = float(np.percentile(regime_final, 50))
+                    regime_p80 = float(np.percentile(regime_final, 80))
+                    
+                    st.metric("Success Rate", f"{regime_results['success_rate']:.1%}")
+                    st.metric("20th %ile", format_currency(regime_p20))
+                    st.metric("Median", format_currency(regime_p50))
+                    st.metric("80th %ile", format_currency(regime_p80))
+                    
+                    st.plotly_chart(
+                        make_fan_chart(regime_results["all_balances"], "Regime-Aware Balance"),
+                        use_container_width=True
+                    )
+                    st.plotly_chart(
+                        make_histogram(regime_final, "Regime-Aware Final Distribution"),
+                        use_container_width=True
+                    )
+                
+                with comp_col2:
+                    st.markdown("### 🎲 Bootstrap Historical")
+                    bootstrap_final = bootstrap_results["final_balances"]
+                    bootstrap_p20 = float(np.percentile(bootstrap_final, 20))
+                    bootstrap_p50 = float(np.percentile(bootstrap_final, 50))
+                    bootstrap_p80 = float(np.percentile(bootstrap_final, 80))
+                    
+                    st.metric("Success Rate", f"{bootstrap_results['success_rate']:.1%}")
+                    st.metric("20th %ile", format_currency(bootstrap_p20))
+                    st.metric("Median", format_currency(bootstrap_p50))
+                    st.metric("80th %ile", format_currency(bootstrap_p80))
+                    
+                    st.plotly_chart(
+                        make_fan_chart(bootstrap_results["all_balances"], "Bootstrap Balance"),
+                        use_container_width=True
+                    )
+                    st.plotly_chart(
+                        make_histogram(bootstrap_final, "Bootstrap Final Distribution"),
+                        use_container_width=True
                     )
 
-                # 8) Save outputs
+                # 6) Save outputs
                 output_dir = Path(config.get("output", {}).get("output_dir", "output"))
                 output_dir.mkdir(parents=True, exist_ok=True)
 
-                summary_results = {
+                regime_summary = {
                     k: (v.tolist() if isinstance(v, np.ndarray) else v)
-                    for k, v in results.items()
+                    for k, v in regime_results.items()
                     if k not in ["all_balances", "all_regimes"]
                 }
+                regime_summary["p20_final"] = regime_p20
+                regime_summary["p80_final"] = regime_p80
 
-                summary_results["p20_final"] = p20
-                summary_results["p80_final"] = p80
+                bootstrap_summary = {
+                    k: (v.tolist() if isinstance(v, np.ndarray) else v)
+                    for k, v in bootstrap_results.items()
+                    if k not in ["all_balances", "all_regimes"]
+                }
+                bootstrap_summary["p20_final"] = bootstrap_p20
+                bootstrap_summary["p80_final"] = bootstrap_p80
 
-                with open(output_dir / "simulation_results.json", "w") as f:
-                    json.dump(summary_results, f, indent=2)
+                with open(output_dir / "regime_results.json", "w") as f:
+                    json.dump(regime_summary, f, indent=2)
+                
+                with open(output_dir / "bootstrap_results.json", "w") as f:
+                    json.dump(bootstrap_summary, f, indent=2)
 
-                st.info(f"Results saved to {output_dir / 'simulation_results.json'}")
+                st.info(f"Results saved to {output_dir}")
 
             except Exception as e:
                 st.exception(e)
 
 
 # -----------------------------------------------------------------------------
-# If simulation already ran, show cached results on reload
+# Show cached results on reload
 # -----------------------------------------------------------------------------
-if st.session_state.results is not None and st.session_state.summary is not None:
+if st.session_state.regime_results is not None and st.session_state.bootstrap_results is not None:
     st.markdown("---")
     st.subheader("Last Simulation Results")
 
-    results = st.session_state.results
-    summary = st.session_state.summary
-    final_balances = results["final_balances"]
-
-    p20 = float(np.percentile(final_balances, 20))
-    p50 = float(np.percentile(final_balances, 50))
-    p80 = float(np.percentile(final_balances, 80))
-
-    col1, col2, col3, col4 = st.columns(4)
-    col1.metric("Probability of Success", f"{results['success_rate']:.1%}")
-    col2.metric("Downside (20th %ile)", format_currency(p20))
-    col3.metric("Median", format_currency(p50))
-    col4.metric("Upside (80th %ile)", format_currency(p80))
+    comp_col1, comp_col2 = st.columns(2)
+    
+    with comp_col1:
+        st.markdown("### 🎯 Regime-Aware")
+        regime_results = st.session_state.regime_results
+        regime_final = regime_results["final_balances"]
+        regime_p20 = float(np.percentile(regime_final, 20))
+        regime_p50 = float(np.percentile(regime_final, 50))
+        regime_p80 = float(np.percentile(regime_final, 80))
+        
+        st.metric("Success Rate", f"{regime_results['success_rate']:.1%}")
+        st.metric("20th %ile", format_currency(regime_p20))
+        st.metric("Median", format_currency(regime_p50))
+        st.metric("80th %ile", format_currency(regime_p80))
+    
+    with comp_col2:
+        st.markdown("### 🎲 Bootstrap Historical")
+        bootstrap_results = st.session_state.bootstrap_results
+        bootstrap_final = bootstrap_results["final_balances"]
+        bootstrap_p20 = float(np.percentile(bootstrap_final, 20))
+        bootstrap_p50 = float(np.percentile(bootstrap_final, 50))
+        bootstrap_p80 = float(np.percentile(bootstrap_final, 80))
+        
+        st.metric("Success Rate", f"{bootstrap_results['success_rate']:.1%}")
+        st.metric("20th %ile", format_currency(bootstrap_p20))
+        st.metric("Median", format_currency(bootstrap_p50))
+        st.metric("80th %ile", format_currency(bootstrap_p80))
